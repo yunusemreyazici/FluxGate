@@ -224,16 +224,18 @@ class ManagedTLSIdentityManager:
         )
         if check.returncode != 0:
             return False
-        host_flag = "-checkip" if _is_ip(hostname) else "-checkhost"
+        host_flag = "-verify_ip" if _is_ip(hostname) else "-verify_hostname"
         return (
             self.context.runner.run(
                 [
                     "openssl",
-                    "x509",
-                    "-noout",
+                    "verify",
+                    "-CAfile",
+                    str(identity.ca_certificate),
+                    "-purpose",
+                    "sslserver",
                     host_flag,
                     hostname,
-                    "-in",
                     str(identity.certificate),
                 ],
                 check=False,

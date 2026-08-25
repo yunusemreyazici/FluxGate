@@ -507,6 +507,49 @@ def test_managed_tls_identity_has_san_private_modes_and_reuses_valid_identity(
         manager.ensure("vpn.example.com")
 
 
+@pytest.mark.parametrize(
+    ("certificate_identity", "expectations"),
+    [
+        (
+            "vpn.example.com",
+            {
+                "vpn.example.com": True,
+                "other.example.com": False,
+                "example.com": False,
+                "127.0.0.1": False,
+            },
+        ),
+        (
+            "192.0.2.10",
+            {
+                "192.0.2.10": True,
+                "192.0.2.11": False,
+                "vpn.example.com": False,
+            },
+        ),
+        (
+            "2001:db8::10",
+            {
+                "2001:db8::10": True,
+                "2001:db8::11": False,
+                "vpn.example.com": False,
+            },
+        ),
+    ],
+)
+def test_managed_tls_identity_verifies_exact_dns_ip_and_ipv6_san(
+    provider_context,
+    certificate_identity: str,
+    expectations: dict[str, bool],
+) -> None:
+    provider_context.runner = CommandRunner()
+    manager = ManagedTLSIdentityManager(provider_context)
+    identity = manager.ensure(certificate_identity)
+
+    for checked_identity, expected in expectations.items():
+        assert manager.valid(identity, checked_identity) is expected
+
+
 def test_managed_tls_detects_mismatched_server_and_ca_keys(provider_context) -> None:
     provider_context.runner = CommandRunner()
     manager = ManagedTLSIdentityManager(provider_context)
