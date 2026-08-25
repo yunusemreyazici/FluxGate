@@ -5,31 +5,31 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-25
+
 ### Added
 
-- Production OpenVPN UDP provider with an owned CA, server/client certificates, CRL enforcement,
-  standalone client profiles, service health, rollback, and host collision checks.
-- Explicit provider-neutral client provisioning and unified per-provider export trees.
-- Shared forwarding leases and independently tagged nftables NAT rules for simultaneous providers.
-- Project URLs and future package-index distribution guidance.
+- Production OpenVPN UDP provider with FluxGate-owned PKI, certificate revocation and CRL
+  enforcement, `tls-crypt`, standalone `.ovpn` exports, and doctor/status integration.
+- Provider-independent client identities with explicit per-provider provisioning and revocation,
+  plus unified provider-neutral exports.
+- Safe simultaneous WireGuard/OpenVPN operation through shared forwarding ownership and
+  independently tagged nftables NAT rules.
+- Multi-provider rollback, idempotency, v0.1 state compatibility, packaging validation, and
+  improved README/project metadata.
 
 ### Changed
 
 - `client add` now creates only the identity; `client enable CLIENT PROVIDER` explicitly provisions
   credentials, and `client disable CLIENT PROVIDER` revokes only that provider.
-- State schema 1 remains unchanged because v0.1 already stored credentials by provider name.
+- State schema 1 remains compatible because v0.1 already stored credentials by provider name.
 
 ### Fixed
 
-- Verify CRL signatures and expiry, generate CRLs for the certificate lifetime, and safely refresh
-  CRLs approaching expiry.
-- Keep provider credentials in state until host revocation succeeds, with idempotent OpenVPN
-  revocation recovery when the final state write is interrupted.
-- Require systemd disable postconditions and roll back failed disable attempts.
-- Preflight and transactionally restore unified export trees after unsafe destinations or partial
-  write failures.
-- Preserve the previous installer release if command-link setup fails during an interrupted
-  installation.
+- Added CRL signature/expiry validation and renewal, crash-safe revoke ordering,
+  interruption-safe certificate serial handling, and systemd disable postconditions.
+- Made unified export reconciliation transactional and protected installer release switching from
+  interrupted rollback failures.
 
 ## [0.1.1] - 2026-08-25
 

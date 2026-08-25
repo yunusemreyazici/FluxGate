@@ -24,4 +24,4 @@ fluxgate version
 ```
 
 No package-index upload, name-reservation package, credentials, or publishing workflow is part of
-Phase 0.2.
+the v0.2.0 release.

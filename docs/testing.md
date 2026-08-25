@@ -23,7 +23,7 @@ counters, reconnect after service restart, revoke enforcement, reboot persistenc
 ownership-safe cleanup. Python/runtime compatibility was separately validated for the native
 Python floors relevant to Ubuntu 22.04 and Debian 12.
 
-## 0.2 development validation
+## v0.2.0 validation
 
 The OpenVPN implementation was validated on the same authorized Ubuntu 24.04 test host with the
 existing WireGuard provider and Bob client preserved. Fresh/idempotent enable, native service and

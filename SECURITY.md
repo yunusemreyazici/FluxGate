@@ -28,6 +28,5 @@ Private keys and generated client files are written with mode `0600`. Atomic wri
 symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
 DNS, and safe distribution and revocation of client configurations.
 
-WireGuard is the only supported provider in the v0.1.1 release. OpenVPN UDP is implemented on the
-0.2 development branch but is not yet released. sing-box, Xray-core, AmneziaWG, and other roadmap
-integrations remain unsupported.
+WireGuard and OpenVPN UDP are supported in the v0.2.0 release. sing-box, Xray-core, AmneziaWG,
+Pathfinder, and other roadmap integrations remain unsupported.

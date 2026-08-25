@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from fluxgate.clients import ClientService
-from fluxgate.core.errors import FluxGateError, ProviderError
+from fluxgate.core.errors import FluxGateError, ProviderError, UnsupportedProviderError
 from fluxgate.core.models import (
     OperationResult,
     ProviderDetection,
@@ -15,6 +15,7 @@ from fluxgate.core.registry import ProviderRegistry
 from fluxgate.core.state import StateStore
 from fluxgate.providers.base import CoreProvider
 from fluxgate.providers.openvpn import OpenVPNProvider
+from fluxgate.providers.singbox import SingBoxProvider
 
 
 class MinimalProvider(CoreProvider):
@@ -57,6 +58,13 @@ def test_openvpn_provider_registers_production_capabilities(provider_context) ->
     registry = ProviderRegistry([provider])
     assert registry.get("openvpn") is provider
     assert provider.capabilities
+
+
+def test_planned_provider_messages_are_release_version_neutral(provider_context) -> None:
+    provider = SingBoxProvider(provider_context)
+    assert provider.status().detail == "provider is planned but not implemented"
+    with pytest.raises(UnsupportedProviderError, match="planned but not implemented"):
+        provider.enable()
 
 
 def test_client_service_prevents_duplicate_names(tmp_path: Path) -> None:

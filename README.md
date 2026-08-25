@@ -15,13 +15,13 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate v0.1.1 is the latest stable early-stage release. The main branch is currently developing
-0.2 from that baseline.
+FluxGate v0.2.0 is the latest stable early-stage release.
 
-**Implemented on the 0.2 development branch:** WireGuard and OpenVPN UDP.
+**Supported:** WireGuard and OpenVPN UDP.
 
-**Planned:** sing-box, Xray-core, AmneziaWG, and later integrations and features. The registered
-sing-box and Xray-core entries remain visible placeholders that refuse enable operations.
+**Planned:** sing-box, Xray-core, AmneziaWG, Pathfinder, and later integrations and features. The
+registered sing-box and Xray-core entries remain visible placeholders that refuse enable
+operations.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -32,11 +32,11 @@ real end-to-end WireGuard client connection were validated on an Ubuntu 24.04 VP
 compatibility was validated for the native Python floors relevant to Ubuntu 22.04 and Debian 12;
 this does not imply that the full privileged lifecycle was exercised on all three distributions.
 
-The 0.2 development implementation has also been validated on Ubuntu 24.04 with simultaneous
+The v0.2.0 implementation was also validated on Ubuntu 24.04 with simultaneous
 WireGuard/OpenVPN operation and a real macOS OpenVPN client. That validation covered TLS and
 certificate authentication, assigned address, full-tunnel IPv4 egress, pushed DNS, native
 counters, service restart, provider-selective disable, reboot recovery, CRL revoke enforcement,
-and cleanup. It is development validation, not a 0.2 release claim.
+and cleanup.
 
 ## Architecture
 

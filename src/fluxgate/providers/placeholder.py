@@ -18,11 +18,11 @@ class PlaceholderProvider(CoreProvider):
         return ProviderStatus(
             name=self.name,
             state=ProviderStateName.UNSUPPORTED,
-            detail="not implemented in FluxGate 0.1",
+            detail="provider is planned but not implemented",
         )
 
     def enable(self) -> OperationResult:
-        raise UnsupportedProviderError(f"{self.display_name} is not implemented in FluxGate 0.1")
+        raise UnsupportedProviderError(f"{self.display_name} is planned but not implemented")
 
     def disable(self) -> OperationResult:
-        raise UnsupportedProviderError(f"{self.display_name} is not implemented in FluxGate 0.1")
+        raise UnsupportedProviderError(f"{self.display_name} is planned but not implemented")
