@@ -31,7 +31,7 @@ def test_cli_version_and_profiles() -> None:
     runner = CliRunner()
     version = runner.invoke(app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.1.0"
+    assert version.stdout.strip() == "0.1.1"
     profiles = runner.invoke(app, ["profile", "list"])
     assert profiles.exit_code == 0
     assert "wireguard" in profiles.stdout

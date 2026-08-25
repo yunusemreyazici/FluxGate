@@ -3,6 +3,13 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-08-25
+
+### Fixed
+
+- Made strict mypy checks portable on Python 3.10 when the conditional `tomli` dependency is
+  installed. This patch does not change runtime behavior.
+
 ## [0.1.0] - 2026-08-25
 
 ### Added

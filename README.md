@@ -10,13 +10,13 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate v0.1.0 is an early-stage release.
+FluxGate v0.1.1 is an early-stage release.
 
 **Supported now:** WireGuard.
 
 **Planned:** OpenVPN, sing-box, Xray-core, AmneziaWG, and later integrations and features. The
 registered OpenVPN, sing-box, and Xray-core entries are visible placeholders that refuse enable
-operations; they are not functioning providers in v0.1.0.
+operations; they are not functioning providers in v0.1.1.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host

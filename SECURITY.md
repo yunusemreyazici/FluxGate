@@ -27,5 +27,5 @@ Private keys and generated client files are written with mode `0600`. Atomic wri
 symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
 DNS, and safe distribution and revocation of client configurations.
 
-WireGuard is the only supported provider in v0.1.0. OpenVPN, sing-box, and Xray-core are
+WireGuard is the only supported provider in v0.1.1. OpenVPN, sing-box, and Xray-core are
 non-operational placeholders; AmneziaWG and other roadmap integrations are also unsupported.
