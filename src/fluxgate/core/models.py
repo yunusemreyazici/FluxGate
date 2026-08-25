@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fluxgate.core.compat import StrEnum
 
@@ -32,6 +32,92 @@ class ProviderCapability(StrEnum):
     EXPORT_CONFIG = "export-config"
     RELOAD = "reload"
     ROTATE_KEYS = "rotate-keys"
+    MANAGE_PROFILES = "manage-profiles"
+    PROFILE_CLIENTS = "profile-clients"
+    PROFILE_EXPORT = "profile-export"
+
+
+class ProtocolName(StrEnum):
+    VLESS = "vless"
+    TROJAN = "trojan"
+    HYSTERIA2 = "hysteria2"
+
+
+class TransportName(StrEnum):
+    TCP = "tcp"
+    QUIC = "quic"
+
+
+class SecurityName(StrEnum):
+    TLS = "tls"
+
+
+class SocketProtocol(StrEnum):
+    TCP = "tcp"
+    UDP = "udp"
+
+
+class ProfileCapabilities(StrictModel):
+    socket_protocol: SocketProtocol
+    requires_tls: bool
+    requires_ip_forwarding: bool = False
+    requires_nat: bool = False
+    per_client_credentials: bool = True
+    multiple_clients: bool = True
+
+
+class ProtocolSpec(StrictModel):
+    protocol: ProtocolName
+    provider: Literal["singbox"] = "singbox"
+    transports: tuple[TransportName, ...]
+    security_modes: tuple[SecurityName, ...]
+    capabilities: ProfileCapabilities
+
+
+class ProfileDefinition(StrictModel):
+    """A stable connectable endpoint, distinct from its implementing core."""
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    provider: Literal["singbox"] = "singbox"
+    protocol: ProtocolName
+    transport: TransportName
+    security: SecurityName
+    listen_address: Literal["0.0.0.0", "::"] = "0.0.0.0"  # noqa: S104
+    listen_port: int = Field(ge=1, le=65535)
+    enabled: bool = False
+    provider_options: dict[str, str | int | bool] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("name")
+    @classmethod
+    def safe_name(cls, value: str) -> str:
+        if (
+            not (1 <= len(value) <= 64)
+            or not value[0].isalnum()
+            or any(not (character.isalnum() or character in {"-", "_", "."}) for character in value)
+        ):
+            raise ValueError("profile name may contain letters, digits, '.', '_' and '-'")
+        if value in {".", ".."}:
+            raise ValueError("invalid profile name")
+        return value
+
+    @model_validator(mode="after")
+    def supported_combination(self) -> ProfileDefinition:
+        combinations = {
+            (ProtocolName.VLESS, TransportName.TCP, SecurityName.TLS),
+            (ProtocolName.TROJAN, TransportName.TCP, SecurityName.TLS),
+            (ProtocolName.HYSTERIA2, TransportName.QUIC, SecurityName.TLS),
+        }
+        if (self.protocol, self.transport, self.security) not in combinations:
+            raise ValueError("unsupported protocol/transport/security combination")
+        if self.provider_options:
+            raise ValueError("provider options are not supported in FluxGate 0.3")
+        return self
+
+    @property
+    def socket_protocol(self) -> SocketProtocol:
+        return SocketProtocol.UDP if self.transport == TransportName.QUIC else SocketProtocol.TCP
 
 
 class HealthLevel(StrEnum):
@@ -102,6 +188,7 @@ class Client(StrictModel):
     expires_at: datetime | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     provider_credentials: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    profile_credentials: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @field_validator("name")
     @classmethod
@@ -118,6 +205,7 @@ class Client(StrictModel):
 
 
 class FluxGateState(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     clients: list[Client] = Field(default_factory=list)
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    profiles: list[ProfileDefinition] = Field(default_factory=list)

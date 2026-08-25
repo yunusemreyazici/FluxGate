@@ -23,7 +23,11 @@ def client_list() -> None:
         if not clients:
             typer.echo("No clients.")
         for client in clients:
-            state = "enabled" if client.provider_credentials else "unprovisioned"
+            state = (
+                "enabled"
+                if client.provider_credentials or client.profile_credentials
+                else "unprovisioned"
+            )
             typer.echo(f"{client.id}  {client.name:<20} {state}")
     except FluxGateError as error:
         fail(error)
@@ -44,13 +48,31 @@ def client_add(name: Annotated[str, typer.Argument(help="Unique display name.")]
 @client_app.command("enable")
 def client_enable(
     identity: Annotated[str, typer.Argument(help="Client name or UUID.")],
-    provider: Annotated[str, typer.Argument(help="Provider to provision.")],
+    provider: Annotated[str | None, typer.Argument(help="Provider to provision.")] = None,
+    profile: Annotated[
+        str | None, typer.Option("--profile", help="Profile to provision instead of a provider.")
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Provision one provider for an existing client identity."""
     try:
-        application = build_application()
-        require_root(application)
-        client = application.clients.enable_provider(identity, provider)
+        if (provider is None) == (profile is None):
+            raise FluxGateError("specify exactly one provider argument or --profile")
+        application = build_application(dry_run=dry_run)
+        require_root(application, dry_run=dry_run)
+        if dry_run and provider is not None:
+            application.clients.find(identity)
+            application.providers.get(provider)
+            typer.echo("Dry-run: would provision provider credentials without generating them")
+            return
+        client = (
+            application.clients.enable_profile(identity, profile, dry_run=dry_run)
+            if profile is not None
+            else application.clients.enable_provider(identity, provider or "")
+        )
+        if dry_run:
+            typer.echo("Dry-run: would provision credentials without generating them")
+            return
         typer.echo(json.dumps(safe_client(client), indent=2))
     except FluxGateError as error:
         fail(error)
@@ -59,13 +81,32 @@ def client_enable(
 @client_app.command("disable")
 def client_disable(
     identity: Annotated[str, typer.Argument(help="Client name or UUID.")],
-    provider: Annotated[str, typer.Argument(help="Provider to revoke.")],
+    provider: Annotated[str | None, typer.Argument(help="Provider to revoke.")] = None,
+    profile: Annotated[
+        str | None, typer.Option("--profile", help="Profile to revoke instead of a provider.")
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
     """Revoke one provider without changing the client's other providers."""
     try:
-        application = build_application()
-        require_root(application)
-        client = application.clients.disable_provider(identity, provider)
+        if (provider is None) == (profile is None):
+            raise FluxGateError("specify exactly one provider argument or --profile")
+        application = build_application(dry_run=dry_run)
+        require_root(application, dry_run=dry_run)
+        if dry_run and provider is not None:
+            client = application.clients.find(identity)
+            if provider not in client.provider_credentials:
+                raise FluxGateError(f"client {client.name} has no credentials for {provider}")
+            typer.echo("Dry-run: would revoke the selected provider credential")
+            return
+        client = (
+            application.clients.disable_profile(identity, profile, dry_run=dry_run)
+            if profile is not None
+            else application.clients.disable_provider(identity, provider or "")
+        )
+        if dry_run:
+            typer.echo("Dry-run: would revoke the selected credential")
+            return
         typer.echo(json.dumps(safe_client(client), indent=2))
     except FluxGateError as error:
         fail(error)
@@ -77,6 +118,9 @@ def client_export(
     provider: Annotated[
         str | None, typer.Option("--provider", help="Export only one provisioned provider.")
     ] = None,
+    profile: Annotated[
+        str | None, typer.Option("--profile", help="Export only one provisioned profile.")
+    ] = None,
     output: Annotated[
         Path, typer.Option("--output", "-o", help="Parent directory for the client export tree.")
     ] = Path("."),
@@ -85,7 +129,9 @@ def client_export(
     try:
         application = build_application()
         require_root(application)
-        paths = application.clients.export(identity, output, provider)
+        if provider is not None and profile is not None:
+            raise FluxGateError("--provider and --profile are mutually exclusive")
+        paths = application.clients.export(identity, output, provider, profile)
         for path in paths:
             typer.echo(f"Exported {path}")
     except FluxGateError as error:

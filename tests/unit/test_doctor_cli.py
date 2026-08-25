@@ -2,9 +2,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from fluxgate.application import build_application
 from fluxgate.cli.app import app
 from fluxgate.cli.common import safe_client
-from fluxgate.core.models import Client, ProviderDetection
+from fluxgate.core.models import Client, FluxGateState, ProviderDetection
 from fluxgate.core.registry import ProviderRegistry
 from fluxgate.health import Doctor, HealthSeverity
 from fluxgate.providers.wireguard import WireGuardProvider
@@ -34,14 +35,13 @@ def test_cli_version_and_profiles() -> None:
     assert version.stdout.strip() == "0.2.0"
     profiles = runner.invoke(app, ["profile", "list"])
     assert profiles.exit_code == 0
-    assert "wireguard" in profiles.stdout
-    assert "planned" in profiles.stdout
+    assert profiles.stdout == "No profiles.\n"
 
 
 def test_cli_errors_are_noninteractive_and_return_one() -> None:
     result = CliRunner().invoke(app, ["profile", "show", "does-not-exist"])
     assert result.exit_code == 1
-    assert "Error: unknown profile: does-not-exist" in result.stderr
+    assert "Error: profile not found: does-not-exist" in result.stderr
 
 
 def test_explicit_client_cli_creates_identity_without_provisioning_every_provider(
@@ -71,6 +71,21 @@ def test_client_json_object_has_a_versioned_secret_free_shape() -> None:
     assert payload["schema_version"] == 1
     assert payload["providers"] == ["wireguard"]
     assert "private_key" not in payload
+
+
+def test_client_list_treats_profile_only_credentials_as_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FLUXGATE_CONFIG_DIR", str(tmp_path / "etc"))
+    monkeypatch.setenv("FLUXGATE_DATA_DIR", str(tmp_path / "data"))
+    application = build_application()
+    client = Client(name="profile-only", enabled=True)
+    client.profile_credentials["12345678-1234-5678-1234-567812345678"] = {"password": "not-printed"}
+    application.state.save(FluxGateState(clients=[client]))
+    result = CliRunner().invoke(app, ["client", "list"])
+    assert result.exit_code == 0
+    assert "profile-only" in result.stdout and "enabled" in result.stdout
+    assert "not-printed" not in result.stdout
 
 
 def test_cli_config_validate_with_overridden_paths(tmp_path: Path, monkeypatch) -> None:

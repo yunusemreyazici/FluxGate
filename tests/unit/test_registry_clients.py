@@ -15,7 +15,7 @@ from fluxgate.core.registry import ProviderRegistry
 from fluxgate.core.state import StateStore
 from fluxgate.providers.base import CoreProvider
 from fluxgate.providers.openvpn import OpenVPNProvider
-from fluxgate.providers.singbox import SingBoxProvider
+from fluxgate.providers.xray import XrayProvider
 
 
 class MinimalProvider(CoreProvider):
@@ -61,7 +61,7 @@ def test_openvpn_provider_registers_production_capabilities(provider_context) ->
 
 
 def test_planned_provider_messages_are_release_version_neutral(provider_context) -> None:
-    provider = SingBoxProvider(provider_context)
+    provider = XrayProvider(provider_context)
     assert provider.status().detail == "provider is planned but not implemented"
     with pytest.raises(UnsupportedProviderError, match="planned but not implemented"):
         provider.enable()

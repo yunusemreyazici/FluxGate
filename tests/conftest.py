@@ -24,6 +24,8 @@ class FakeRunner:
             return CommandResult(command, 0, f"private-{self.key_number}\n")
         if command == ("wg", "pubkey"):
             return CommandResult(command, 0, f"public-{self.key_number}\n")
+        if len(command) == 2 and command[1] == "version" and "sing-box" in command[0]:
+            return CommandResult(command, 0, "sing-box version 1.13.19\n")
         return CommandResult(command, 0)
 
 
@@ -33,6 +35,12 @@ class FakePackages:
 
     def install(self, packages: list[str]) -> bool:
         self.installs.append(packages)
+        return True
+
+    def acquire_sing_box(self, destination: Path) -> bool:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"fake sing-box")
+        destination.chmod(0o755)
         return True
 
 
@@ -108,6 +116,9 @@ class FakeServices:
         else:
             self.enabled_units.discard(unit)
         self._set_active(unit, active)
+
+    def daemon_reload(self) -> None:
+        self.events.append("daemon-reload")
 
 
 class FakeFirewall:
@@ -210,6 +221,12 @@ class FakeNetwork:
     def udp_listener_present(self, port: int) -> bool:
         return port in self.listening_ports
 
+    def tcp_port_available(self, port: int) -> bool:
+        return port not in self.occupied_ports and port not in self.listening_ports
+
+    def tcp_listener_present(self, port: int) -> bool:
+        return port in self.listening_ports
+
 
 @pytest.fixture
 def provider_context(tmp_path: Path) -> OperationContext:
@@ -222,6 +239,7 @@ def provider_context(tmp_path: Path) -> OperationContext:
         sysctl_dir=tmp_path / "sysctl",
         nftables_dir=tmp_path / "nftables",
         systemd_dir=tmp_path / "systemd",
+        local_lib_dir=tmp_path / "local-lib",
     )
     config = AppConfig.model_validate(
         {"server": {"domain": "vpn.example.com"}, "network": {"outbound_interface": "eth0"}}

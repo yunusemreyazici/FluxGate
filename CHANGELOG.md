@@ -5,6 +5,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+### Added
+
+- Typed connectable profiles separating core, protocol, transport, TLS security, endpoint, and
+  profile-scoped client credentials.
+- FluxGate-owned sing-box core with verified pinned binary acquisition, deterministic validated
+  configuration, hardened systemd service, managed SAN-bearing TLS, and health checks.
+- VLESS/TCP/TLS, Trojan/TCP/TLS, and Hysteria2/QUIC/TLS server/client configurations.
+- Profile lifecycle/provisioning CLI, unified and individual profile exports, and a secret-free
+  capability manifest.
+
+### Changed
+
+- State schema 2 adds stable profile records and profile credentials while losslessly accepting
+  v0.2 schema-1 WireGuard/OpenVPN state.
+
 ## [0.2.0] - 2026-08-25
 
 ### Added

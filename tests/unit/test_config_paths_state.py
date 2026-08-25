@@ -116,7 +116,7 @@ def test_state_round_trip_is_atomic_and_private(tmp_path: Path) -> None:
     assert store.load() == state
     assert (store.path.stat().st_mode & 0o777) == 0o600
     assert not list(store.path.parent.glob(f".{store.path.name}.*"))
-    assert json.loads(store.path.read_text())["schema_version"] == 1
+    assert json.loads(store.path.read_text())["schema_version"] == 2
 
 
 def test_v01_multi_provider_state_shape_loads_without_migration_or_data_loss(
@@ -159,7 +159,7 @@ def test_future_config_and_state_schema_versions_fail_closed(tmp_path: Path) -> 
     with pytest.raises(ConfigError, match="schema_version"):
         load_config(config)
     state = tmp_path / "state.json"
-    state.write_text('{"schema_version": 2, "clients": [], "providers": {}}')
+    state.write_text('{"schema_version": 3, "clients": [], "providers": {}}')
     with pytest.raises(StateError, match="schema_version"):
         StateStore(state).load()
     state.write_text(

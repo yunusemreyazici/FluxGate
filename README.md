@@ -19,9 +19,9 @@ FluxGate v0.2.0 is the latest stable early-stage release.
 
 **Supported:** WireGuard and OpenVPN UDP.
 
-**Planned:** sing-box, Xray-core, AmneziaWG, Pathfinder, and later integrations and features. The
-registered sing-box and Xray-core entries remain visible placeholders that refuse enable
-operations.
+**Development toward 0.3 (not released):** a FluxGate-owned sing-box core, typed connectable
+profiles, VLESS/TCP/TLS, Trojan/TCP/TLS, Hysteria2/QUIC/TLS, managed TLS trust, and a secret-free
+capability manifest. Xray-core, AmneziaWG, Pathfinder, and later integrations remain planned.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -47,7 +47,8 @@ CLI (presentation only)
        ├── provider registry + capability declarations
        │    ├── WireGuard (implemented)
        │    ├── OpenVPN UDP (implemented)
-       │    ├── sing-box (planned)
+       │    ├── sing-box core (0.3 development)
+       │    │    └── typed VLESS, Trojan, and Hysteria2 profiles
        │    └── Xray-core (planned)
        └── injected host boundaries
             ├── CommandRunner / apt
@@ -56,8 +57,11 @@ CLI (presentation only)
             └── forwarding + filesystem
 ```
 
-Providers own provider-specific system behavior. The CLI and client service use the registry and
-capabilities instead of switching on provider names. Operation plans support dry runs and
+Core, protocol, transport, security, and connectable profile are separate concepts. A sing-box
+profile is an endpoint implemented by the sing-box core; it is not another core provider. Client
+credentials are keyed by stable profile UUID, while WireGuard/OpenVPN credentials remain keyed by
+provider. Providers own provider-specific system behavior. The CLI and client service use the
+registry and capabilities instead of switching on protocol names. Operation plans support dry runs and
 best-effort reverse-order rollback. State and secrets use atomic replacement and restrictive file
 modes. FluxGate providers hold independent forwarding leases and tagged rules inside one owned
 nftables table, so WireGuard and OpenVPN can coexist safely.
@@ -121,6 +125,7 @@ client_dns = ["1.1.1.1", "1.0.0.1"]
 
 [cores.singbox]
 enabled = false
+binary_source = "managed"
 
 [cores.xray]
 enabled = false
@@ -130,7 +135,8 @@ Unknown fields and unsupported schema versions are rejected. `FLUXGATE_CONFIG_DI
 `FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
 `FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_OPENVPN_DIR`, `FLUXGATE_SYSCTL_DIR`,
 `FLUXGATE_NFTABLES_DIR`, and
-`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. Values must be
+`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. The 0.3 development
+tree also accepts `FLUXGATE_LOCAL_LIB_DIR` for its versioned managed sing-box binary. Values must be
 absolute, traversal-free, and contain no whitespace or control characters.
 
 ## CLI examples
@@ -146,18 +152,26 @@ fluxgate core enable wireguard --dry-run
 fluxgate core enable openvpn --dry-run
 sudo fluxgate core enable wireguard
 sudo fluxgate core enable openvpn
+sudo fluxgate core enable singbox
+sudo fluxgate profile create primary-vless --provider singbox --protocol vless \
+  --transport tcp --security tls --port 8443
+sudo fluxgate profile enable primary-vless
 sudo fluxgate client add alice
 sudo fluxgate client enable alice wireguard
 sudo fluxgate client enable alice openvpn
+sudo fluxgate client enable alice --profile primary-vless
 sudo fluxgate client export alice --output ./exports
+sudo fluxgate client export alice --profile primary-vless --output ./exports
+fluxgate manifest show
 sudo fluxgate client disable alice openvpn
 fluxgate client show alice
 sudo fluxgate client revoke alice
 ```
 
 `client add` creates one provider-independent identity and does not provision every running core.
-`client enable` and `client disable` explicitly manage one provider. An export contains one
-subdirectory per provisioned provider and never prints credential material to the terminal.
+`client enable` and `client disable` explicitly manage one provider or one `--profile`. Provisioning
+one sing-box profile never provisions another. An export contains one subdirectory per implementing
+provider and never prints credential material to the terminal.
 
 Dry-run lists planned mutation steps and does not write files, install packages, change services,
 or alter the firewall.
@@ -166,7 +180,12 @@ or alter the firewall.
 
 Human-managed configuration is TOML. Machine state is stored atomically in
 `/var/lib/fluxgate/state.json`; private material and generated client configurations live under
-`/etc/fluxgate` with restrictive modes. Display names are never primary keys—clients use UUIDs.
+`/etc/fluxgate` with restrictive modes. Display names are never primary keys—clients and profiles
+use UUIDs. State schema 2 adds profiles and profile-scoped credentials; v0.2 schema-1 state is
+migrated losslessly in memory and written atomically as schema 2 on the next mutation. Managed
+sing-box TLS uses a private FluxGate CA and a SAN-bearing, versioned server identity. Standalone
+client JSON embeds the trust root and never uses `insecure=true`. Exported proxy JSON contains
+bearer credentials and must be protected like a VPN private key.
 Subprocesses use argument arrays without `shell=True`, have timeouts, and redact secret-like
 options in logs. See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 

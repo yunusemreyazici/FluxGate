@@ -23,6 +23,8 @@ class ServiceManager(Protocol):
 
     def restore(self, unit: str, *, enabled: bool, active: bool) -> None: ...
 
+    def daemon_reload(self) -> None: ...
+
 
 class SystemdServiceManager:
     def __init__(self, runner: CommandRunner) -> None:
@@ -87,3 +89,6 @@ class SystemdServiceManager:
         self.runner.run(["systemctl", "restart", unit], mutate=True)
         if not self.is_active(unit):
             raise StateError(f"{unit} did not become active after restart")
+
+    def daemon_reload(self) -> None:
+        self.runner.run(["systemctl", "daemon-reload"], mutate=True)

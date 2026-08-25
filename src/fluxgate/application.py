@@ -10,6 +10,7 @@ from fluxgate.core.config import AppConfig, load_config
 from fluxgate.core.paths import PathLayout
 from fluxgate.core.registry import ProviderRegistry
 from fluxgate.core.state import StateStore
+from fluxgate.profiles import ProfileService
 from fluxgate.providers.base import OperationContext
 from fluxgate.providers.openvpn import OpenVPNProvider
 from fluxgate.providers.singbox import SingBoxProvider
@@ -29,6 +30,7 @@ class Application:
     state: StateStore
     providers: ProviderRegistry
     clients: ClientService
+    profiles: ProfileService
     context: OperationContext
 
 
@@ -57,4 +59,12 @@ def build_application(*, dry_run: bool = False) -> Application:
             XrayProvider(context),
         ]
     )
-    return Application(config, paths, state, providers, ClientService(state, providers), context)
+    return Application(
+        config,
+        paths,
+        state,
+        providers,
+        ClientService(state, providers),
+        ProfileService(state, providers),
+        context,
+    )

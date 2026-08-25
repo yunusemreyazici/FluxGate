@@ -148,10 +148,15 @@ class ToggleConfig(StrictModel):
     enabled: bool = False
 
 
+class SingBoxConfig(StrictModel):
+    enabled: bool = False
+    binary_source: Literal["managed", "system"] = "managed"
+
+
 class CoresConfig(StrictModel):
     wireguard: WireGuardConfig = Field(default_factory=WireGuardConfig)
     openvpn: OpenVPNConfig = Field(default_factory=OpenVPNConfig)
-    singbox: ToggleConfig = Field(default_factory=ToggleConfig)
+    singbox: SingBoxConfig = Field(default_factory=SingBoxConfig)
     xray: ToggleConfig = Field(default_factory=ToggleConfig)
 
 
@@ -206,7 +211,8 @@ class AppConfig(StrictModel):
             f'network = "{openvpn.network}"\n'
             f"client_dns = [{openvpn_dns}]\n\n"
             "[cores.singbox]\n"
-            f"enabled = {str(self.cores.singbox.enabled).lower()}\n\n"
+            f"enabled = {str(self.cores.singbox.enabled).lower()}\n"
+            f'binary_source = "{self.cores.singbox.binary_source}"\n\n'
             "[cores.xray]\n"
             f"enabled = {str(self.cores.xray.enabled).lower()}\n"
         )

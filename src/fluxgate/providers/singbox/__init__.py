@@ -1,6 +1,3 @@
-from fluxgate.providers.placeholder import PlaceholderProvider
+from fluxgate.providers.singbox.provider import SingBoxProvider
 
-
-class SingBoxProvider(PlaceholderProvider):
-    name = "singbox"
-    display_name = "sing-box"
+__all__ = ["SingBoxProvider"]

@@ -56,13 +56,45 @@ class StateStore:
                 raise StateError(f"refusing to read state through symlink: {self.path}")
             if not self.path.exists():
                 return FluxGateState()
-            return FluxGateState.model_validate_json(self.path.read_bytes())
+            raw = json.loads(self.path.read_bytes())
+            if not isinstance(raw, dict):
+                raise StateError(f"invalid state at {self.path}: document must be an object")
+            version = raw.get("schema_version", 1)
+            if type(version) is not int:
+                raise StateError("invalid state schema_version: expected an integer")
+            if version == 1:
+                raw = self._migrate_v1(raw)
+            elif version != 2:
+                raise StateError(f"unsupported state schema_version: {version}")
+            # JSON mode preserves strict Python construction while parsing standard UUID/datetime
+            # JSON representations written by model_dump(mode="json").
+            return FluxGateState.model_validate_json(json.dumps(raw))
         except StateError:
             raise
         except OSError as error:
             raise StateError(f"cannot read state at {self.path}: {error}") from error
-        except ValidationError as error:
+        except (ValidationError, json.JSONDecodeError) as error:
             raise StateError(f"invalid state at {self.path}: {error}") from error
+
+    @staticmethod
+    def _migrate_v1(raw: dict[object, object]) -> dict[object, object]:
+        """Pure, lossless v0.2 -> v0.3 migration; persistence stays atomic on next save."""
+        migrated = dict(raw)
+        clients = migrated.get("clients", [])
+        if not isinstance(clients, list):
+            return migrated
+        migrated_clients: list[object] = []
+        for item in clients:
+            if not isinstance(item, dict):
+                migrated_clients.append(item)
+                continue
+            client = dict(item)
+            client["profile_credentials"] = {}
+            migrated_clients.append(client)
+        migrated["clients"] = migrated_clients
+        migrated["profiles"] = []
+        migrated["schema_version"] = 2
+        return migrated
 
     def save(self, state: FluxGateState) -> None:
         payload = (

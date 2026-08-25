@@ -19,6 +19,10 @@ class NetworkInspector(Protocol):
 
     def udp_listener_present(self, port: int) -> bool: ...
 
+    def tcp_port_available(self, port: int) -> bool: ...
+
+    def tcp_listener_present(self, port: int) -> bool: ...
+
 
 class LinuxNetworkInspector:
     def __init__(self, runner: CommandRunner) -> None:
@@ -54,6 +58,22 @@ class LinuxNetworkInspector:
 
     def udp_listener_present(self, port: int) -> bool:
         result = self.runner.run(["ss", "-H", "-lun"], check=False)
+        if result.returncode != 0:
+            return False
+        endpoint = re.compile(rf"(?:^|[\s\]])[^\s]*:{port}(?:\s|$)")
+        return any(endpoint.search(line) for line in result.stdout.splitlines())
+
+    def tcp_port_available(self, port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("0.0.0.0", port))  # noqa: S104
+            except OSError:
+                return False
+        return True
+
+    def tcp_listener_present(self, port: int) -> bool:
+        result = self.runner.run(["ss", "-H", "-ltn"], check=False)
         if result.returncode != 0:
             return False
         endpoint = re.compile(rf"(?:^|[\s\]])[^\s]*:{port}(?:\s|$)")

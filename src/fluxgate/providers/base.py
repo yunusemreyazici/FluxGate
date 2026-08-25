@@ -11,9 +11,11 @@ from fluxgate.core.models import (
     Client,
     ClientArtifact,
     ExportArtifact,
+    FluxGateState,
     HealthLevel,
     HealthResult,
     OperationResult,
+    ProfileDefinition,
     ProviderCapability,
     ProviderDetection,
     ProviderStatus,
@@ -85,3 +87,23 @@ class CoreProvider(ABC):
         else:
             level = HealthLevel.FAILURE
         return [HealthResult(name="provider-status", level=level, message=status.detail)]
+
+    def reconcile_profiles(self, desired: FluxGateState) -> OperationResult:
+        from fluxgate.core.errors import UnsupportedProviderError
+
+        raise UnsupportedProviderError(f"{self.display_name} does not support profiles")
+
+    def validate_profile(self, profile: ProfileDefinition, state: FluxGateState) -> None:
+        from fluxgate.core.errors import UnsupportedProviderError
+
+        raise UnsupportedProviderError(f"{self.display_name} does not support profiles")
+
+    def generate_profile_credential(self, profile: ProfileDefinition) -> dict[str, object]:
+        from fluxgate.core.errors import UnsupportedProviderError
+
+        raise UnsupportedProviderError(f"{self.display_name} does not support profile clients")
+
+    def export_profile(self, client: Client, profile: ProfileDefinition) -> ExportArtifact:
+        from fluxgate.core.errors import UnsupportedProviderError
+
+        raise UnsupportedProviderError(f"{self.display_name} does not support profile exports")

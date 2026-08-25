@@ -46,4 +46,5 @@ def safe_client(client: Client) -> dict[str, Any]:
         "expires_at": client.expires_at.isoformat() if client.expires_at else None,
         "metadata": client.metadata,
         "providers": sorted(client.provider_credentials),
+        "profiles": sorted(client.profile_credentials),
     }

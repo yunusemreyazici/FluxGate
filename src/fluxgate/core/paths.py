@@ -17,6 +17,7 @@ DEFAULT_OPENVPN_DIR = Path("/etc/openvpn/server")
 DEFAULT_SYSCTL_DIR = Path("/etc/sysctl.d")
 DEFAULT_NFTABLES_DIR = Path("/etc/fluxgate/nftables")
 DEFAULT_SYSTEMD_DIR = Path("/etc/systemd/system")
+DEFAULT_LOCAL_LIB_DIR = Path("/usr/local/lib/fluxgate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,7 @@ class PathLayout:
     sysctl_dir: Path = DEFAULT_SYSCTL_DIR
     nftables_dir: Path = DEFAULT_NFTABLES_DIR
     systemd_dir: Path = DEFAULT_SYSTEMD_DIR
+    local_lib_dir: Path = DEFAULT_LOCAL_LIB_DIR
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str] | None = None) -> PathLayout:
@@ -56,6 +58,7 @@ class PathLayout:
             sysctl_dir=env_path("FLUXGATE_SYSCTL_DIR", DEFAULT_SYSCTL_DIR),
             nftables_dir=env_path("FLUXGATE_NFTABLES_DIR", DEFAULT_NFTABLES_DIR),
             systemd_dir=env_path("FLUXGATE_SYSTEMD_DIR", DEFAULT_SYSTEMD_DIR),
+            local_lib_dir=env_path("FLUXGATE_LOCAL_LIB_DIR", DEFAULT_LOCAL_LIB_DIR),
         )
 
     @property
@@ -89,6 +92,26 @@ class PathLayout:
     @property
     def clients_dir(self) -> Path:
         return self.config_dir / "clients"
+
+    @property
+    def singbox_dir(self) -> Path:
+        return self.config_dir / "sing-box"
+
+    @property
+    def singbox_config_file(self) -> Path:
+        return self.singbox_dir / "config.json"
+
+    @property
+    def singbox_tls_dir(self) -> Path:
+        return self.secrets_dir / "sing-box-tls"
+
+    @property
+    def singbox_unit_file(self) -> Path:
+        return self.systemd_dir / "fluxgate-singbox.service"
+
+    @property
+    def singbox_binary(self) -> Path:
+        return self.local_lib_dir / "sing-box-1.13.19" / "sing-box"
 
     @property
     def backups_dir(self) -> Path:

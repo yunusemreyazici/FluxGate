@@ -11,7 +11,8 @@ are both covered.
 2. **Privileged Linux lifecycle tests** exercise installation, enablement, idempotency, drift
    reconciliation, client lifecycle, service restart, reboot persistence, disablement, rollback,
    and ownership-safe cleanup on a disposable host.
-3. **End-to-end client tests** establish a real WireGuard or OpenVPN tunnel and verify protocol
+3. **End-to-end client tests** establish a real WireGuard/OpenVPN tunnel or an isolated sing-box
+   localhost SOCKS proxy and verify protocol
    authentication, addressing, tunneled IPv4 egress, DNS, server counters/status, reconnect, and
    revoke enforcement.
 
@@ -46,6 +47,20 @@ server has correctly revoked.
 
 Never record private keys, client exports, host credentials, or other secret test material in test
 output or repository files.
+
+## 0.3 development validation
+
+Profile tests cover the explicit protocol/transport/security compatibility table, stable profile
+IDs, schema-1 migration, selective provisioning/revocation, transactional exports, the secret-free
+manifest, TCP-versus-UDP collision semantics, managed TLS SAN/expiry/modes, deterministic server and
+client rendering, service ownership, rollback, and independence from forwarding/nftables. An
+optional `SING_BOX_TEST_BINARY` test validates every generated profile with the real pinned upstream
+parser.
+
+Real macOS sing-box testing must use a temporary process whose SOCKS inbound binds only
+`127.0.0.1`. Send explicit test requests through that proxy; do not install a TUN interface, alter
+the default route, or change global DNS. Revoke tests verify a new connection with short timeouts,
+then terminate the temporary process and delete only the temporary protected config directory.
 
 For OpenVPN, prepare the exact process/interface teardown before changing routes. Revoke with
 strict short timeouts, confirm the session is no longer functional, and immediately stop the

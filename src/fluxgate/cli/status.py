@@ -37,5 +37,9 @@ def status_command() -> None:
         typer.echo("\nCLIENTS")
         typer.echo(f"Total        {len(clients)}")
         typer.echo(f"Enabled      {sum(client.enabled for client in clients)}")
+        typer.echo("\nPROFILES")
+        profiles = application.profiles.list()
+        typer.echo(f"Total        {len(profiles)}")
+        typer.echo(f"Enabled      {sum(profile.enabled for profile in profiles)}")
     except FluxGateError as error:
         fail(error)
