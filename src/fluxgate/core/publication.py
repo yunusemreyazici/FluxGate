@@ -32,16 +32,15 @@ def safe_relative_path(value: str) -> PurePosixPath:
 
 
 def _preflight(destination: Path) -> None:
-    checked_anchor = False
     for candidate in (destination, *destination.parents):
         if candidate.is_symlink():
             raise FluxGateError(f"refusing publication through symlinked path: {candidate}")
-        if candidate.exists() and not checked_anchor:
-            checked_anchor = True
+        if candidate.exists():
             if candidate != destination and not candidate.is_dir():
                 raise FluxGateError(f"publication ancestor is not a directory: {candidate}")
             metadata = candidate.stat()
-            if stat.S_IMODE(metadata.st_mode) & 0o022:
+            mode = stat.S_IMODE(metadata.st_mode)
+            if mode & 0o022 and not mode & stat.S_ISVTX:
                 raise FluxGateError(
                     f"refusing publication through group/world-writable path: {candidate}"
                 )
@@ -68,12 +67,20 @@ def _remove_owned_tree(root: Path) -> None:
     root.rmdir()
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def publish_tree(
     destination: Path,
     files: Mapping[str, PublishedFile],
     verify: Callable[[Path], object],
 ) -> None:
-    """Publish a complete tree or restore the exact previously verified tree."""
+    """Publish transactionally; rollback before commit and retain the new tree after commit."""
     _preflight(destination)
     normalized = [safe_relative_path(value) for value in files]
     if len(normalized) != len(set(normalized)):
@@ -101,14 +108,7 @@ def publish_tree(
         os.rename(stage, destination)
         published = True
         verify(destination)
-        if backup is not None:
-            _remove_owned_tree(backup)
-            backup = None
-        directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_directory(destination.parent)
     except BaseException as error:
         try:
             if published and destination.exists():
@@ -122,3 +122,12 @@ def publish_tree(
                 f"managed publication failed: {error}; rollback failed: {rollback_error}"
             ) from error
         raise
+    if backup is not None:
+        try:
+            _remove_owned_tree(backup)
+        except BaseException as error:
+            raise FluxGateError(
+                "managed publication committed successfully, but obsolete backup cleanup "
+                f"failed; the new destination was retained and stale backup remains at {backup}: "
+                f"{error}"
+            ) from error

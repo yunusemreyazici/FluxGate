@@ -81,6 +81,15 @@ def build_manifest(
     wireguard_enabled = provider_enabled("wireguard", config.cores.wireguard.enabled)
     openvpn_enabled = provider_enabled("openvpn", config.cores.openvpn.enabled)
     singbox_enabled = provider_enabled("singbox", config.cores.singbox.enabled)
+    if not endpoint and (
+        wireguard_enabled
+        or openvpn_enabled
+        or (singbox_enabled and any(profile.enabled for profile in state.profiles))
+    ):
+        raise StateError(
+            "cannot generate connectable manifest: server.domain is required when a candidate "
+            "is enabled"
+        )
     if wireguard_enabled:
         candidates.append(
             ConnectionCandidate(

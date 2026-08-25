@@ -7,7 +7,8 @@ import json
 import os
 import stat
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -94,6 +95,8 @@ def _verify_bootstrap(
         ) from error
     if manifest.server.server_id != trust.server_id or descriptor.server_id != trust.server_id:
         raise VerificationError("bundle server IDs do not match trusted server identity")
+    if hashlib.sha256(manifest_bytes).hexdigest() != descriptor.manifest_sha256:
+        raise VerificationError("bootstrap manifest digest mismatch")
 
     declared: set[Path] = set()
     for artifact in descriptor.artifacts:
@@ -156,10 +159,45 @@ class BootstrapService:
             raise FluxGateError(f"provider does not declare a connection mode: {provider_name}")
         return mode
 
+    @staticmethod
+    def _artifact_suffix(name: str) -> str:
+        suffix = PurePosixPath(name).suffix.lower()
+        if (
+            not suffix
+            or len(suffix) > 16
+            or any(character not in ".abcdefghijklmnopqrstuvwxyz0123456789" for character in suffix)
+        ):
+            raise FluxGateError(f"provider export has no safe file extension: {name!r}")
+        return suffix
+
+    @classmethod
+    def _client_artifact_path(
+        cls,
+        provider_name: str,
+        client_id: UUID,
+        exported_name: str,
+        index: int,
+        count: int,
+    ) -> str:
+        ordinal = f"-{index + 1}" if count > 1 else ""
+        return (
+            f"{provider_name}/client-{client_id.hex}{ordinal}{cls._artifact_suffix(exported_name)}"
+        )
+
+    @classmethod
+    def _profile_artifact_path(
+        cls, provider_name: str, profile_id: UUID, exported_name: str
+    ) -> str:
+        return f"{provider_name}/profile-{profile_id.hex}{cls._artifact_suffix(exported_name)}"
+
+    @staticmethod
+    def _bundle_root(destination: Path, client_id: UUID) -> Path:
+        return destination / f"client-{client_id.hex}"
+
     def export(self, identity_value: str, destination: Path, *, dry_run: bool = False) -> Path:
         if dry_run:
             client = self.clients.find(identity_value)
-            return destination / client.name
+            return self._bundle_root(destination, client.id)
         with self.state.lock():
             signing_identity = self.identity.ensure()
             state = self.state.load()
@@ -181,8 +219,15 @@ class BootstrapService:
                 provider = self.providers.get(provider_name)
                 if ProviderCapability.EXPORT_CONFIG not in provider.capabilities:
                     raise FluxGateError(f"provider does not support exports: {provider_name}")
-                for exported in provider.export_client(client):
-                    path = f"{provider_name}/{exported.name}"
+                exported_artifacts = provider.export_client(client)
+                for index, exported in enumerate(exported_artifacts):
+                    path = self._client_artifact_path(
+                        provider_name,
+                        client.id,
+                        exported.name,
+                        index,
+                        len(exported_artifacts),
+                    )
                     content = exported.content.encode()
                     if path in files:
                         raise FluxGateError(f"duplicate bootstrap artifact: {path}")
@@ -207,7 +252,7 @@ class BootstrapService:
                         f"provider does not support profile exports: {profile.provider}"
                     )
                 exported = provider.export_profile(client, profile)
-                path = f"{profile.provider}/{exported.name}"
+                path = self._profile_artifact_path(profile.provider, profile.id, exported.name)
                 content = exported.content.encode()
                 if path in files:
                     raise FluxGateError(f"duplicate bootstrap artifact: {path}")
@@ -229,6 +274,7 @@ class BootstrapService:
                 client_id=client.id,
                 client_name=client.name,
                 created_at=created_at,
+                manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
                 artifacts=tuple(sorted(inventory, key=lambda item: item.path)),
             )
             bootstrap_bytes = (
@@ -245,15 +291,10 @@ class BootstrapService:
                 self.identity.sign(bootstrap_bytes, signing_identity),
                 0o600,
             )
-            root = destination / client.name
+            root = self._bundle_root(destination, client.id)
             publish_tree(
                 root,
                 files,
                 lambda path: verify_bootstrap(path, pinned_trust=signing_identity.trust),
             )
-            directory_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
             return root

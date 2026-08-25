@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from fluxgate.application import build_application
@@ -140,3 +141,54 @@ def test_doctor_json_has_versioned_stable_envelope(tmp_path: Path, monkeypatch) 
     assert payload["schema_version"] == 1
     assert isinstance(payload["checks"], list)
     assert result.exit_code == 1
+
+
+def test_status_identity_state_is_lazy_and_aggregated(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FLUXGATE_CONFIG_DIR", str(tmp_path / "etc"))
+    monkeypatch.setenv("FLUXGATE_DATA_DIR", str(tmp_path / "data"))
+    uninitialized = CliRunner().invoke(app, ["status"])
+    assert uninitialized.exit_code == 0
+    assert "State        healthy" in uninitialized.stdout.split("CORES", 1)[0]
+    assert "SERVER IDENTITY\nState        not initialized" in uninitialized.stdout
+    assert not (tmp_path / "etc" / "secrets" / "server-identity").exists()
+
+    application = build_application()
+    identity = application.identity.ensure()
+    healthy = CliRunner().invoke(app, ["status"])
+    assert healthy.exit_code == 0
+    assert "State        healthy" in healthy.stdout.split("CORES", 1)[0]
+    assert f"Server ID    {identity.metadata.server_id}" in healthy.stdout
+
+    application.identity.private_path.write_bytes(b"corrupt")
+    degraded = CliRunner().invoke(app, ["status"])
+    assert degraded.exit_code == 0
+    assert "State        degraded" in degraded.stdout.split("CORES", 1)[0]
+    assert "SERVER IDENTITY\nState        degraded" in degraded.stdout
+    assert "corrupt" not in degraded.stdout
+
+
+@pytest.mark.parametrize("corruption", ["partial", "bad-mode", "symlink", "mismatch"])
+def test_status_degrades_for_unsafe_initialized_identity(
+    tmp_path: Path, monkeypatch, corruption: str
+) -> None:
+    root = tmp_path / corruption
+    monkeypatch.setenv("FLUXGATE_CONFIG_DIR", str(root / "etc"))
+    monkeypatch.setenv("FLUXGATE_DATA_DIR", str(root / "data"))
+    application = build_application()
+    if corruption == "partial":
+        application.identity.root.mkdir(parents=True, mode=0o700)
+        (application.identity.root / "private.key").write_bytes(b"partial")
+    else:
+        application.identity.ensure()
+        if corruption == "bad-mode":
+            application.identity.private_path.chmod(0o644)
+        elif corruption == "symlink":
+            saved = application.identity.root.with_name("saved-identity")
+            application.identity.root.rename(saved)
+            application.identity.root.symlink_to(saved, target_is_directory=True)
+        else:
+            application.identity.public_path.write_bytes(b"x" * 32)
+    result = CliRunner().invoke(app, ["status"])
+    assert result.exit_code == 0
+    assert "State        degraded" in result.stdout.split("CORES", 1)[0]
+    assert "SERVER IDENTITY\nState        degraded" in result.stdout

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from fluxgate.core.compat import StrEnum
 from fluxgate.core.models import StrictModel
@@ -66,6 +66,16 @@ class ConnectionCandidate(StrictModel):
     ip_families: tuple[IPFamily, ...]
     required_features: tuple[FeatureCapability, ...] = ()
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def enabled_candidate_has_endpoint(self) -> ConnectionCandidate:
+        if self.enabled and (
+            not self.endpoint.strip()
+            or self.endpoint != self.endpoint.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in self.endpoint)
+        ):
+            raise ValueError("enabled connection candidate requires a usable endpoint")
+        return self
 
     @field_validator("candidate_id")
     @classmethod

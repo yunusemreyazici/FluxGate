@@ -42,12 +42,22 @@ class BootstrapDescriptor(StrictModel):
     client_name: str
     created_at: datetime
     manifest_path: Literal["manifest.json"] = "manifest.json"
+    manifest_sha256: str
     artifacts: tuple[BootstrapArtifact, ...]
+
+    @field_validator("manifest_sha256")
+    @classmethod
+    def manifest_digest_shape(cls, value: str) -> str:
+        if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+            raise ValueError("manifest SHA-256 must be lowercase hexadecimal")
+        return value
 
     @model_validator(mode="after")
     def unique_artifact_paths(self) -> BootstrapDescriptor:
         paths = [safe_relative_path(item.path) for item in self.artifacts]
-        if len(paths) != len(set(paths)):
+        if len(paths) != len(set(paths)) or len(paths) != len(
+            {path.as_posix().casefold() for path in paths}
+        ):
             raise ValueError("bootstrap artifact paths must be unique")
         return self
 

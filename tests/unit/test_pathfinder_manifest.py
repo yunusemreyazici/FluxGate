@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from fluxgate.core.config import AppConfig
+from fluxgate.core.errors import StateError
 from fluxgate.core.manifest import ServerManifest, build_manifest
 from fluxgate.core.models import (
     FluxGateState,
@@ -17,6 +20,7 @@ from fluxgate.identity import ServerIdentityManager
 from fluxgate.manifest import SignedManifestService, verify_signed_manifest
 from fluxgate.pathfinder import (
     ClientCapabilities,
+    ConnectionCandidate,
     ConnectionMode,
     IPFamily,
     PathfinderProtocol,
@@ -121,6 +125,46 @@ def test_provider_candidates_follow_durable_enabled_state() -> None:
     state = FluxGateState(providers={"wireguard": {"enabled": True}, "openvpn": {"enabled": True}})
     identifiers = {candidate.candidate_id for candidate in build_manifest(config, state).candidates}
     assert identifiers == {"provider:wireguard", "provider:openvpn"}
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        FluxGateState(providers={"wireguard": {"enabled": True}}),
+        FluxGateState(providers={"openvpn": {"enabled": True}}),
+        FluxGateState(
+            providers={"singbox": {"enabled": True}},
+            profiles=[_state().profiles[0]],
+        ),
+    ],
+)
+def test_enabled_candidates_require_configured_server_endpoint(state: FluxGateState) -> None:
+    with pytest.raises(StateError, match=r"server\.domain is required"):
+        build_manifest(AppConfig(), state)
+
+
+def test_missing_endpoint_is_allowed_only_without_enabled_candidates() -> None:
+    manifest = build_manifest(AppConfig(), FluxGateState())
+    assert manifest.server.identity == ""
+    assert manifest.candidates == ()
+
+
+@pytest.mark.parametrize("endpoint", ["vpn.example.test", "192.0.2.10"])
+def test_normal_dns_and_ipv4_candidate_endpoints(endpoint: str) -> None:
+    config = AppConfig.model_validate(
+        {"server": {"domain": endpoint}, "cores": {"wireguard": {"enabled": True}}}
+    )
+    assert build_manifest(config, FluxGateState()).candidates[0].endpoint == endpoint
+
+
+def test_candidate_model_rejects_empty_enabled_endpoint_but_allows_future_ipv6_form() -> None:
+    valid = build_manifest(_config(), _state()).candidates[0]
+    payload = valid.model_dump()
+    payload["endpoint"] = ""
+    with pytest.raises(ValueError, match="usable endpoint"):
+        ConnectionCandidate.model_validate(payload)
+    payload["endpoint"] = "2001:db8::1"
+    assert ConnectionCandidate.model_validate(payload).endpoint == "2001:db8::1"
 
 
 def test_signed_manifest_exact_bytes_pinned_trust_and_atomic_replacement(

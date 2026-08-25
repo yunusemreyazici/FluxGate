@@ -21,6 +21,15 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ### Fixed
 
+- Bind each signed bootstrap descriptor to the exact signed manifest generation and reject
+  case-folded artifact path collisions.
+- Use stable ASCII UUID-based physical bootstrap names without changing legacy provider exports.
+- Keep a durably committed replacement when obsolete publication-backup cleanup fails, while
+  retaining exact rollback before the commit point.
+- Refuse enabled manifest candidates without a configured endpoint and aggregate an invalid
+  initialized signing identity into top-level status.
+- Check writable ancestors even when a protected identity or publication destination already
+  exists.
 - Clear only the target managed systemd unit's failure counter before restart so rapid legitimate
   profile reconciliation and rollback recover from `StartLimitBurst` exhaustion.
 

@@ -91,6 +91,10 @@ ancestor links, hard links, first-use races, and non-mutating dry runs. Bootstra
 seven WireGuard/OpenVPN/sing-box provider combinations, disabled or unprovisioned credentials,
 pinned trust, every signed document and provider artifact tamper, transactional
 write/swap/post-verification failures, unmanaged destinations, and simultaneous replacements.
+Review regression coverage additionally rejects mixed valid manifest/bootstrap generations,
+case-folded paths, empty enabled endpoints, cross-client credential mixing, and unsafe writable
+ancestors. Publication failure injection distinguishes exact rollback before parent-directory
+fsync from committed-new-tree retention during first or partial stale-backup cleanup failures.
 Pathfinder tests are pure and deterministic.
 
 The upstream sing-box v1.13.19 parser gate remains separate: set `SING_BOX_TEST_BINARY` to the

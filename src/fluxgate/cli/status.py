@@ -32,7 +32,17 @@ def status_command() -> None:
         operating_system = detect_os()
         clients = application.clients.list()
         statuses = [provider.status() for provider in application.providers.all()]
+        identity = None
+        identity_state = "not initialized"
+        try:
+            identity = application.identity.load_optional()
+            if identity is not None:
+                identity_state = "healthy"
+        except IdentityError:
+            identity_state = "degraded"
         overall = overall_state(statuses)
+        if identity_state == "degraded":
+            overall = "degraded"
         typer.echo("FluxGate\n")
         typer.echo(f"Version      {__version__}")
         typer.echo(f"Host         {application.config.server.domain or '(not configured)'}")
@@ -49,13 +59,9 @@ def status_command() -> None:
         typer.echo(f"Total        {len(profiles)}")
         typer.echo(f"Enabled      {sum(profile.enabled for profile in profiles)}")
         typer.echo("\nSERVER IDENTITY")
-        try:
-            identity = application.identity.load_optional()
-            typer.echo(f"State        {'healthy' if identity is not None else 'not initialized'}")
-            if identity is not None:
-                typer.echo(f"Server ID    {identity.metadata.server_id}")
-                typer.echo(f"Key ID       {identity.metadata.key_id}")
-        except IdentityError:
-            typer.echo("State        degraded")
+        typer.echo(f"State        {identity_state}")
+        if identity is not None:
+            typer.echo(f"Server ID    {identity.metadata.server_id}")
+            typer.echo(f"Key ID       {identity.metadata.key_id}")
     except FluxGateError as error:
         fail(error)

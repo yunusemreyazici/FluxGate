@@ -49,6 +49,8 @@ cryptographic random source, stored in a FluxGate-owned mode-0700 directory, and
 private key in a mode-0600 regular file. It is independent of every VPN key and TLS PKI. Unsafe
 ownership, modes, symlinks, hard links, corrupt key bytes, or a public/private mismatch fail closed;
 FluxGate never silently regenerates a corrupt identity because that would break pinned trust.
+Existing protected roots do not hide unsafe writable ancestors; sticky shared temporary-directory
+boundaries remain usable while non-sticky group/world-writable ancestors are rejected.
 
 `trust.json` contains only the public key and metadata. Its fingerprint is lowercase SHA-256 over
 the canonical 32 raw Ed25519 public-key bytes, prefixed by `sha256:`. Detached envelopes use padded
@@ -60,7 +62,10 @@ offline bootstrap. Subsequent verification accepts a separately pinned trust des
 replacement of the bundle's adjacent trust file. This pin authenticates a FluxGate signing identity;
 it does not prove DNS ownership, and TLS trust remains independent.
 
-`bootstrap.json` signs an inventory whose entries contain SHA-256 hashes of provider artifacts.
+`bootstrap.json` signs an inventory whose entries contain SHA-256 hashes of provider artifacts and
+the SHA-256 of the exact signed `manifest.json` bytes from the same generation. The latter prevents
+mixing two independently valid snapshots, but does not prevent replay of a complete old snapshot.
+Bootstrap physical paths are deterministic ASCII UUID-based names; display names remain metadata.
 The bundle is atomically published and verified after publication. These controls provide
 authenticity, integrity, and tamper detection—not confidentiality. VPN/profile artifacts remain
 secrets. The client-identifying descriptor and its detached signature are both mode `0600`; public

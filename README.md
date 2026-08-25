@@ -88,18 +88,18 @@ The v0.4 development tree adds three separate concepts without changing provider
 - `PathfinderCandidate` and `ClientCapabilities` support deterministic offline compatibility
   evaluation. They distinguish system tunnels from local proxies and report missing capabilities.
 
-Example full bundle:
+Example full bundle (physical names use stable UUIDs rather than display names):
 
 ```text
-alice/
+client-10000000000000000000000000000001/
 ├── trust.json
 ├── manifest.json
 ├── manifest.sig
 ├── bootstrap.json
 ├── bootstrap.sig
-├── wireguard/alice.conf
-├── openvpn/alice.ovpn
-└── singbox/{vless,trojan,hysteria2}.json
+├── wireguard/client-10000000000000000000000000000001.conf
+├── openvpn/client-10000000000000000000000000000001.ovpn
+└── singbox/profile-<profile-id-without-hyphens>.json
 ```
 
 Initial trust is explicit: an administrator securely transfers the offline bundle and the client
@@ -107,11 +107,14 @@ pins its public signing descriptor. Later metadata must be checked with that sep
 an untrusted neighboring `trust.json` is not a substitute. The signing identity authenticates
 metadata from that previously trusted FluxGate identity. It does not prove arbitrary DNS ownership,
 replace TLS verification, encrypt bundle contents, or make manifests replay-proof.
+The signed bootstrap descriptor hashes the exact `manifest.json` bytes so two valid generations
+cannot be mixed into one accepted bundle. This is snapshot consistency, not replay prevention.
 
 ```bash
 sudo fluxgate client bootstrap alice --output ./bootstrap
-fluxgate client bootstrap-verify ./bootstrap/alice
-fluxgate client bootstrap-verify ./bootstrap/alice --pinned-trust ./pinned/trust.json --json
+fluxgate client bootstrap-verify ./bootstrap/client-<client-id-without-hyphens>
+fluxgate client bootstrap-verify ./bootstrap/client-<client-id-without-hyphens> \
+  --pinned-trust ./pinned/trust.json --json
 sudo fluxgate manifest export-signed --output ./signed-manifest
 fluxgate manifest verify ./signed-manifest --pinned-trust ./pinned/trust.json
 fluxgate pathfinder evaluate --manifest ./signed-manifest/manifest.json \

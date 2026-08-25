@@ -57,18 +57,17 @@ class ServerIdentityManager:
         return self.root / "public.key"
 
     def _assert_safe_ancestors(self, path: Path) -> None:
-        checked_anchor = False
         for candidate in (path, *path.parents):
             if candidate.is_symlink():
                 raise IdentityError(f"refusing symlinked server identity path: {candidate}")
-            if candidate.exists() and not checked_anchor:
-                checked_anchor = True
+            if candidate.exists():
                 if not candidate.is_dir():
                     raise IdentityError(f"server identity ancestor is not a directory: {candidate}")
                 metadata = candidate.stat()
                 if os.geteuid() == 0 and metadata.st_uid != 0:
                     raise IdentityError(f"server identity path is not root-owned: {candidate}")
-                if stat.S_IMODE(metadata.st_mode) & 0o022:
+                mode = stat.S_IMODE(metadata.st_mode)
+                if mode & 0o022 and not mode & stat.S_ISVTX:
                     raise IdentityError(
                         f"server identity path is group/world-writable: {candidate}"
                     )

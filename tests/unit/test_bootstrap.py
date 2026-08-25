@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from fluxgate.application import build_application
-from fluxgate.bootstrap import BootstrapService, verify_bootstrap
+from fluxgate.bootstrap import BootstrapDescriptor, BootstrapService, verify_bootstrap
 from fluxgate.cli.app import app
 from fluxgate.clients import ClientService
 from fluxgate.core.config import AppConfig
@@ -126,11 +128,20 @@ def _profiles() -> list[ProfileDefinition]:
     ]
 
 
-def _service(provider_context, enabled: tuple[str, ...]) -> tuple[BootstrapService, Client]:
+def _service(
+    provider_context,
+    enabled: tuple[str, ...],
+    *,
+    client_name: str = "alice",
+    profile_names: tuple[str, str, str] | None = None,
+) -> tuple[BootstrapService, Client]:
     profiles = _profiles()
+    if profile_names is not None:
+        for profile, name in zip(profiles, profile_names, strict=True):
+            profile.name = name
     client = Client(
         id=UUID("10000000-0000-0000-0000-000000000001"),
-        name="alice",
+        name=client_name,
         provider_credentials={name: {"test": True} for name in enabled if name != "singbox"},
         profile_credentials=(
             {str(profile.id): {"value": f"test-only-{profile.name}"} for profile in profiles}
@@ -181,7 +192,48 @@ def test_disabled_and_unprovisioned_profiles_are_excluded(provider_context, tmp_
     provider_context.state.save(state)
     root = service.export(client.name, tmp_path / "out")
     descriptor = json.loads((root / "bootstrap.json").read_bytes())
-    assert [item["path"] for item in descriptor["artifacts"]] == ["singbox/hysteria2.json"]
+    assert [item["path"] for item in descriptor["artifacts"]] == [
+        f"singbox/profile-{state.profiles[2].id.hex}.json"
+    ]
+
+
+def test_bootstrap_binds_exact_manifest_generation(provider_context, tmp_path: Path) -> None:
+    service, _ = _service(provider_context, ("wireguard", "openvpn"))
+    live = service.export("alice", tmp_path / "out")
+    generation_a = tmp_path / "generation-a"
+    shutil.copytree(live, generation_a)
+    live = service.export("alice", tmp_path / "out")
+    generation_b = tmp_path / "generation-b"
+    shutil.copytree(live, generation_b)
+    pinned = load_trust(generation_a / "trust.json")
+    assert verify_bootstrap(generation_a, pinned_trust=pinned).valid
+    assert verify_bootstrap(generation_b, pinned_trust=pinned).valid
+
+    mixed_a_manifest = tmp_path / "mixed-a-manifest"
+    shutil.copytree(generation_b, mixed_a_manifest)
+    for name in ("manifest.json", "manifest.sig"):
+        shutil.copy2(generation_a / name, mixed_a_manifest / name)
+    with pytest.raises(VerificationError, match="manifest digest"):
+        verify_bootstrap(mixed_a_manifest, pinned_trust=pinned)
+
+    mixed_b_manifest = tmp_path / "mixed-b-manifest"
+    shutil.copytree(generation_a, mixed_b_manifest)
+    for name in ("manifest.json", "manifest.sig"):
+        shutil.copy2(generation_b / name, mixed_b_manifest / name)
+    with pytest.raises(VerificationError, match="manifest digest"):
+        verify_bootstrap(mixed_b_manifest, pinned_trust=pinned)
+
+    resigned = tmp_path / "resigned-different-generation"
+    shutil.copytree(generation_b, resigned)
+    manifest = json.loads((resigned / "manifest.json").read_bytes())
+    manifest["generated_at"] = datetime(2030, 1, 1, tzinfo=timezone.utc).isoformat()
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False).encode() + b"\n"
+    )
+    (resigned / "manifest.json").write_bytes(manifest_bytes)
+    (resigned / "manifest.sig").write_bytes(service.identity.sign(manifest_bytes))
+    with pytest.raises(VerificationError, match="manifest digest"):
+        verify_bootstrap(resigned, pinned_trust=pinned)
 
 
 def test_every_signed_file_and_provider_artifact_tamper_is_detected(
@@ -256,9 +308,9 @@ def test_atomic_replacement_preserves_previous_bundle_on_provider_failure(
 
 
 def test_dry_run_creates_no_identity_lock_or_output(provider_context, tmp_path: Path) -> None:
-    service, _ = _service(provider_context, ("wireguard",))
+    service, client = _service(provider_context, ("wireguard",))
     root = service.export("alice", tmp_path / "out", dry_run=True)
-    assert root == tmp_path / "out" / "alice"
+    assert root == tmp_path / "out" / f"client-{client.id.hex}"
     assert not root.exists()
     assert not service.identity.root.exists()
     assert not service.identity.paths.server_identity_lock_file.exists()
@@ -276,8 +328,8 @@ def test_artifact_paths_fail_closed(path: str) -> None:
 
 
 def test_unmanaged_destination_is_not_deleted(provider_context, tmp_path: Path) -> None:
-    service, _ = _service(provider_context, ("wireguard",))
-    root = tmp_path / "out" / "alice"
+    service, client = _service(provider_context, ("wireguard",))
+    root = tmp_path / "out" / f"client-{client.id.hex}"
     root.mkdir(parents=True, mode=0o700)
     foreign = root / "foreign.txt"
     foreign.write_text("keep")
@@ -290,7 +342,8 @@ def test_unmanaged_destination_is_not_deleted(provider_context, tmp_path: Path) 
 def test_symlink_and_hardlink_artifacts_fail_closed(provider_context, tmp_path: Path) -> None:
     service, _ = _service(provider_context, ("wireguard",))
     root = service.export("alice", tmp_path / "out")
-    artifact = root / "wireguard" / "alice.conf"
+    client = provider_context.state.load().clients[0]
+    artifact = root / "wireguard" / f"client-{client.id.hex}.conf"
     original = artifact.read_bytes()
     artifact.unlink()
     artifact.symlink_to(root / "manifest.json")
@@ -313,7 +366,190 @@ def test_simultaneous_bootstrap_replacements_leave_one_valid_generation(
         roots = list(pool.map(lambda _: service.export("alice", tmp_path / "out"), range(8)))
     assert len(set(roots)) == 1
     assert verify_bootstrap(roots[0]).artifact_count == 5
-    assert not list((tmp_path / "out").glob(".alice.*"))
+    assert not list((tmp_path / "out").glob(f".{roots[0].name}.*"))
+
+
+def test_verifier_during_atomic_replacement_never_accepts_a_partial_bundle(
+    provider_context, tmp_path: Path
+) -> None:
+    service, _ = _service(provider_context, ("wireguard", "openvpn", "singbox"))
+    root = service.export("alice", tmp_path / "out")
+    pinned = load_trust(root / "trust.json")
+
+    def replace_repeatedly() -> None:
+        for _ in range(30):
+            service.export("alice", tmp_path / "out")
+
+    def verify_repeatedly() -> int:
+        valid = 0
+        for _ in range(300):
+            try:
+                result = verify_bootstrap(root, pinned_trust=pinned)
+            except VerificationError:
+                continue
+            assert result.client_id == UUID("10000000-0000-0000-0000-000000000001")
+            assert result.artifact_count == 5
+            valid += 1
+        return valid
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(replace_repeatedly)
+        reader = pool.submit(verify_repeatedly)
+        writer.result()
+        successful_reads = reader.result()
+    assert successful_reads > 0
+    assert verify_bootstrap(root, pinned_trust=pinned).artifact_count == 5
+
+
+def test_bootstrap_paths_use_stable_ascii_ids_not_display_names(
+    provider_context, tmp_path: Path
+) -> None:
+    service, client = _service(
+        provider_context,
+        ("wireguard", "openvpn", "singbox"),
+        client_name="用户",
+        profile_names=("Test", "test", "é"),
+    )
+    first = service.export(client.name, tmp_path / "out")
+    descriptor = BootstrapDescriptor.model_validate_json((first / "bootstrap.json").read_bytes())
+    first_paths = tuple(item.path for item in descriptor.artifacts)
+    assert first.name == f"client-{client.id.hex}"
+    assert all(path.isascii() and path == path.casefold() for path in first_paths)
+    assert len(first_paths) == len(set(first_paths))
+    assert any(f"profile-{_profiles()[0].id.hex}.json" in path for path in first_paths)
+    assert any(f"profile-{_profiles()[1].id.hex}.json" in path for path in first_paths)
+    second = service.export(client.name, tmp_path / "out")
+    second_descriptor = BootstrapDescriptor.model_validate_json(
+        (second / "bootstrap.json").read_bytes()
+    )
+    assert tuple(item.path for item in second_descriptor.artifacts) == first_paths
+
+
+@pytest.mark.parametrize("client_name", ["é", "İphone", "用户", "a" * 64])
+def test_v03_valid_display_names_bootstrap_with_ascii_paths(
+    provider_context, tmp_path: Path, client_name: str
+) -> None:
+    service, client = _service(provider_context, ("wireguard",), client_name=client_name)
+    root = service.export(client.name, tmp_path / "out")
+    descriptor = BootstrapDescriptor.model_validate_json((root / "bootstrap.json").read_bytes())
+    assert descriptor.client_name == client_name
+    assert all(item.path.isascii() for item in descriptor.artifacts)
+
+
+def test_casefold_colliding_descriptor_paths_are_rejected(provider_context, tmp_path: Path) -> None:
+    service, _ = _service(provider_context, ("wireguard",))
+    root = service.export("alice", tmp_path / "out")
+    payload = json.loads((root / "bootstrap.json").read_bytes())
+    duplicate = dict(payload["artifacts"][0])
+    duplicate["path"] = duplicate["path"].upper()
+    payload["artifacts"].append(duplicate)
+    with pytest.raises(ValidationError, match="paths must be unique"):
+        BootstrapDescriptor.model_validate_json(json.dumps(payload))
+
+
+def test_decomposed_or_traversal_display_names_remain_invalid() -> None:
+    with pytest.raises(ValidationError):
+        Client(name="e\N{COMBINING ACUTE ACCENT}")
+    with pytest.raises(ValidationError):
+        Client(name="../alice")
+
+
+def test_cross_client_bundles_remain_isolated_through_state_changes_and_concurrency(
+    provider_context, tmp_path: Path
+) -> None:
+    profiles = _profiles()
+    clients = [
+        Client(
+            id=UUID("20000000-0000-0000-0000-000000000001"),
+            name="client-a",
+            provider_credentials={
+                "wireguard": {"marker": "a-wireguard-secret"},
+                "openvpn": {"marker": "a-openvpn-secret"},
+            },
+            profile_credentials={
+                str(profile.id): {"value": f"a-{profile.name}-secret"} for profile in profiles
+            },
+        ),
+        Client(
+            id=UUID("20000000-0000-0000-0000-000000000002"),
+            name="client-b",
+            provider_credentials={
+                "wireguard": {"marker": "b-wireguard-secret"},
+                "openvpn": {"marker": "b-openvpn-secret"},
+            },
+            profile_credentials={
+                str(profile.id): {"value": f"b-{profile.name}-secret"} for profile in profiles
+            },
+        ),
+    ]
+    provider_context.state.save(FluxGateState(clients=clients, profiles=profiles))
+    registry = ProviderRegistry(
+        ExportProvider(name) for name in ("wireguard", "openvpn", "singbox")
+    )
+    service = BootstrapService(
+        _config(),
+        provider_context.state,
+        registry,
+        ClientService(provider_context.state, registry),
+        ServerIdentityManager(provider_context.paths),
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        bundle_a, bundle_b = list(
+            pool.map(
+                lambda item: service.export(item[0], item[1]),
+                (("client-a", tmp_path / "a"), ("client-b", tmp_path / "b")),
+            )
+        )
+    bytes_a = b"\n".join(path.read_bytes() for path in bundle_a.rglob("*") if path.is_file())
+    bytes_b = b"\n".join(path.read_bytes() for path in bundle_b.rglob("*") if path.is_file())
+    assert str(clients[1].id).encode() not in bytes_a
+    assert str(clients[0].id).encode() not in bytes_b
+    assert b"b-vless-secret" not in bytes_a
+    assert b"a-vless-secret" not in bytes_b
+
+    state = provider_context.state.load()
+    state.clients[0].provider_credentials.clear()
+    state.clients[0].profile_credentials.clear()
+    provider_context.state.save(state)
+    with pytest.raises(FluxGateError, match="no provisioned credentials"):
+        service.export("client-a", tmp_path / "revoked-a")
+    assert verify_bootstrap(service.export("client-b", tmp_path / "b")).artifact_count == 5
+
+    state = provider_context.state.load()
+    state.clients[0].provider_credentials["wireguard"] = {"marker": "a-reprovisioned"}
+    provider_context.state.save(state)
+    reprovisioned_a = service.export("client-a", tmp_path / "reprovisioned-a")
+    assert verify_bootstrap(reprovisioned_a).artifact_count == 1
+    assert str(clients[1].id).encode() not in b"\n".join(
+        path.read_bytes() for path in reprovisioned_a.rglob("*") if path.is_file()
+    )
+
+    state = provider_context.state.load()
+    removed = state.profiles.pop(0)
+    provider_context.state.save(state)
+    without_profile = service.export("client-b", tmp_path / "b")
+    without_paths = {
+        item.path
+        for item in BootstrapDescriptor.model_validate_json(
+            (without_profile / "bootstrap.json").read_bytes()
+        ).artifacts
+    }
+    assert f"singbox/profile-{removed.id.hex}.json" not in without_paths
+
+    replacement = removed.model_copy(update={"id": UUID("30000000-0000-0000-0000-000000000001")})
+    state = provider_context.state.load()
+    state.profiles.append(replacement)
+    state.clients[1].profile_credentials[str(replacement.id)] = {"value": "b-recreated-secret"}
+    provider_context.state.save(state)
+    recreated = service.export("client-b", tmp_path / "b")
+    recreated_paths = {
+        item.path
+        for item in BootstrapDescriptor.model_validate_json(
+            (recreated / "bootstrap.json").read_bytes()
+        ).artifacts
+    }
+    assert f"singbox/profile-{replacement.id.hex}.json" in recreated_paths
+    assert f"singbox/profile-{removed.id.hex}.json" not in recreated_paths
 
 
 @pytest.mark.parametrize("failure_write", [1, 3, 6, 8])
