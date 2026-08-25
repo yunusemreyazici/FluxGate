@@ -5,28 +5,31 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-25
+
 ### Added
 
-- Typed connectable profiles separating core, protocol, transport, TLS security, endpoint, and
-  profile-scoped client credentials.
-- FluxGate-owned sing-box core with verified pinned binary acquisition, deterministic validated
-  configuration, hardened systemd service, managed SAN-bearing TLS, and health checks.
-- VLESS/TCP/TLS, Trojan/TCP/TLS, and Hysteria2/QUIC/TLS server/client configurations.
-- Profile lifecycle/provisioning CLI, unified and individual profile exports, and a secret-free
-  capability manifest.
+- A production sing-box `CoreProvider` and typed engine separating core, protocol, transport,
+  security, and stable connectable profile identities.
+- VLESS/TCP/TLS, Trojan/TCP/TLS, and Hysteria2/QUIC/TLS profiles, with multiple profiles served by
+  one managed sing-box daemon and no forwarding or NAT ownership for normal proxy profiles.
+- Schema-2 profile state with lossless v0.2 schema-1 migration, profile-scoped client credentials,
+  and provider/profile-selective provisioning and revocation.
+- Unified WireGuard, OpenVPN, and sing-box exports, plus a secret-free capability manifest.
+- Managed sing-box CA/server identities, verified pinned sing-box acquisition, doctor/status
+  integration, reboot persistence, and TCP/UDP-aware IPv4/IPv6 listener collision checks.
 
 ### Changed
 
-- State schema 2 adds stable profile records and profile credentials while losslessly accepting
-  v0.2 schema-1 WireGuard/OpenVPN state.
+- WireGuard, OpenVPN, and sing-box can coexist under the same control plane while retaining
+  provider-specific ownership and lifecycle boundaries.
 
-### Fixed
+### Security
 
-- Made schema-1 migration reject schema-2-only fields instead of silently discarding corrupt
-  data, and made status fail closed on sing-box service, TLS, unit, or config divergence.
-- Refused writable or symlinked managed ancestors before filesystem mutation, verified CA/server
-  key pairing and CA constraints, enforced HTTPS across release redirects, and hardened the
-  sing-box service umask.
+- Hardened managed path, symlink, and ancestor ownership checks; secure export parents; TLS
+  CA/server key pairing; portable DNS/IP identity verification; and fail-closed schema migration.
+- Tightened service/config/status convergence, HTTPS redirect validation, and the sing-box systemd
+  umask without adopting foreign host state.
 
 ## [0.2.0] - 2026-08-25
 

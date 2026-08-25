@@ -15,13 +15,15 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate v0.2.0 is the latest stable early-stage release.
+FluxGate v0.3.0 is the latest stable early-stage release.
 
-**Supported:** WireGuard and OpenVPN UDP.
+**Supported cores/providers:** WireGuard, OpenVPN UDP, and sing-box.
 
-**Development toward 0.3 (not released):** a FluxGate-owned sing-box core, typed connectable
-profiles, VLESS/TCP/TLS, Trojan/TCP/TLS, Hysteria2/QUIC/TLS, managed TLS trust, and a secret-free
-capability manifest. Xray-core, AmneziaWG, Pathfinder, and later integrations remain planned.
+**Supported sing-box profiles in v0.3.0:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
+Hysteria2/QUIC/TLS.
+
+**Planned/deferred:** Xray-core, TUIC, WebSocket, HTTP/2, gRPC, Reality, Shadowsocks, VMess,
+Pathfinder and automatic profile probing/scoring, and a web UI or 3x-ui integration.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -38,6 +40,12 @@ certificate authentication, assigned address, full-tunnel IPv4 egress, pushed DN
 counters, service restart, provider-selective disable, reboot recovery, CRL revoke enforcement,
 and cleanup.
 
+The v0.3.0 implementation was privileged-tested on Ubuntu 24.04 with WireGuard, OpenVPN, and
+sing-box active together. Real macOS clients validated VLESS/TCP/TLS, Trojan/TCP/TLS, and
+Hysteria2/QUIC/TLS, including DNS, IPv4 egress, selective revocation, service restart, and VPS
+reboot recovery. Ubuntu 22.04 and Debian 12 remain supported by design and CI/runtime compatibility;
+their complete privileged lifecycle has not yet been exercised.
+
 ## Architecture
 
 ```text
@@ -47,7 +55,7 @@ CLI (presentation only)
        ├── provider registry + capability declarations
        │    ├── WireGuard (implemented)
        │    ├── OpenVPN UDP (implemented)
-       │    ├── sing-box core (0.3 development)
+       │    ├── sing-box core (implemented)
        │    │    └── typed VLESS, Trojan, and Hysteria2 profiles
        │    └── Xray-core (planned)
        └── injected host boundaries
@@ -57,8 +65,9 @@ CLI (presentation only)
             └── forwarding + filesystem
 ```
 
-Core, protocol, transport, security, and connectable profile are separate concepts. A sing-box
-profile is an endpoint implemented by the sing-box core; it is not another core provider. Client
+**Core != Protocol != Profile.** Core, protocol, transport, security, and connectable profile are
+separate concepts. A sing-box profile is an endpoint implemented by the sing-box core; it is not
+another core provider. Client
 credentials are keyed by stable profile UUID, while WireGuard/OpenVPN credentials remain keyed by
 provider. Providers own provider-specific system behavior. The CLI and client service use the
 registry and capabilities instead of switching on protocol names. Operation plans support dry runs and
@@ -135,8 +144,8 @@ Unknown fields and unsupported schema versions are rejected. `FLUXGATE_CONFIG_DI
 `FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
 `FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_OPENVPN_DIR`, `FLUXGATE_SYSCTL_DIR`,
 `FLUXGATE_NFTABLES_DIR`, and
-`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. The 0.3 development
-tree also accepts `FLUXGATE_LOCAL_LIB_DIR` for its versioned managed sing-box binary. Values must be
+`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. FluxGate v0.3.0 also
+accepts `FLUXGATE_LOCAL_LIB_DIR` for its versioned managed sing-box binary. Values must be
 absolute, traversal-free, and contain no whitespace or control characters.
 
 ## CLI examples
@@ -189,7 +198,7 @@ bearer credentials and must be protected like a VPN private key.
 Subprocesses use argument arrays without `shell=True`, have timeouts, and redact secret-like
 options in logs. See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
-Before the first state-changing 0.3 command, an upgraded schema-1 installation can still run the
+Before the first state-changing v0.3.0 command, an upgraded schema-1 installation can still run the
 v0.2 application tree. After schema 2 is persisted, v0.2 correctly refuses the future schema; a
 downgrade then requires restoring the operator's pre-upgrade state backup rather than pointing the
 old application at schema-2 state.
@@ -213,7 +222,7 @@ path.
 
 - **0.1:** architecture, CLI, configuration/state, doctor, WireGuard
 - **0.2:** OpenVPN and unified client exports
-- **0.3:** sing-box and protocol profiles
+- **0.3:** sing-box and protocol profiles (released)
 - **0.4:** Xray-core and subscription exporters
 - **0.5:** AmneziaWG and resilience profiles
 - **Later:** TUIC, WebSocket/HTTP2/gRPC transports, Reality, OpenConnect, optional 3x-ui

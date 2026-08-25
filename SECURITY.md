@@ -28,13 +28,15 @@ Private keys and generated client files are written with mode `0600`. Atomic wri
 symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
 DNS, and safe distribution and revocation of client configurations.
 
-The unreleased 0.3 development tree adds a FluxGate-owned TLS CA and versioned sing-box server
+FluxGate v0.3.0 adds a FluxGate-owned TLS CA and versioned sing-box server
 identity. Its standalone proxy exports embed the public CA but also contain bearer credentials;
 store and distribute them as secrets. FluxGate does not reuse the OpenVPN PKI, enable insecure TLS,
 or adopt foreign sing-box configuration, units, or TLS directories. The pinned managed binary is
 downloaded over HTTPS and accepted only after its official release SHA-256 matches. Managed path
-ancestors must not be symlinks or writable by other users, and TLS health checks verify CA/server
-key pairing, trust, validity, constraints, SAN, and private-file modes.
+ancestors must not be symlinks or writable by other users. TLS health checks verify CA/server key
+pairing, the trust chain, validity, constraints, SAN identity, and restrictive private-file modes.
+DNS identities use OpenSSL hostname verification and literal IP identities use OpenSSL IP
+verification. Standalone client configurations never set `insecure=true`.
 
-WireGuard and OpenVPN UDP are supported in the v0.2.0 release. The sing-box work is unreleased;
-Xray-core, AmneziaWG, Pathfinder, and other roadmap integrations remain unsupported.
+WireGuard, OpenVPN UDP, and sing-box are supported in v0.3.0. Xray-core, TUIC, additional
+transports, Reality, Pathfinder, web management, and other roadmap integrations remain unsupported.

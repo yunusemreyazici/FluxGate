@@ -48,7 +48,7 @@ server has correctly revoked.
 Never record private keys, client exports, host credentials, or other secret test material in test
 output or repository files.
 
-## 0.3 development validation
+## v0.3.0 validation
 
 Profile tests cover the explicit protocol/transport/security compatibility table, stable profile
 IDs, schema-1 migration, selective provisioning/revocation, transactional exports, the secret-free
@@ -56,6 +56,22 @@ manifest, TCP-versus-UDP collision semantics, managed TLS SAN/expiry/modes, dete
 client rendering, service ownership, rollback, and independence from forwarding/nftables. An
 optional `SING_BOX_TEST_BINARY` test validates every generated profile with the real pinned upstream
 parser.
+
+Privileged Ubuntu 24.04 validation covered clean and idempotent sing-box enablement, managed TLS and
+service ownership, multiple profiles in one daemon, doctor/status convergence, IPv4/IPv6 TCP and
+UDP listener collision detection, service restart, VPS reboot persistence, and simultaneous
+WireGuard/OpenVPN/sing-box operation. Focused Linux/OpenSSL testing reproduced and closed the
+managed DNS identity portability issue using authoritative hostname verification.
+
+Temporary macOS sing-box clients completed real VLESS/TCP/TLS, Trojan/TCP/TLS, and
+Hysteria2/QUIC/TLS connections through a loopback-only SOCKS inbound. Validation included remote
+DNS, public IPv4 egress through the VPS, selective profile revocation, new-session denial after
+revocation, service restart recovery, and VPS reboot recovery. No persistent TUN interface or
+global macOS route/DNS change was used.
+
+Ubuntu 22.04 and Debian 12 are supported by the installer, native Python floor, and provider design,
+and Python 3.10-3.14 is covered by CI. The complete privileged v0.3.0 lifecycle has so far been
+exercised on Ubuntu 24.04, not on every supported distribution.
 
 Real macOS sing-box testing must use a temporary process whose SOCKS inbound binds only
 `127.0.0.1`. Send explicit test requests through that proxy; do not install a TUN interface, alter

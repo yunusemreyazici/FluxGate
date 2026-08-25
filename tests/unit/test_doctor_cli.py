@@ -39,7 +39,7 @@ def test_cli_version_and_profiles() -> None:
     runner = CliRunner()
     version = runner.invoke(app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.2.0"
+    assert version.stdout.strip() == "0.3.0"
     profiles = runner.invoke(app, ["profile", "list"])
     assert profiles.exit_code == 0
     assert profiles.stdout == "No profiles.\n"
