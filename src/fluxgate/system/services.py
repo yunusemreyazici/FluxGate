@@ -86,6 +86,9 @@ class SystemdServiceManager:
         self.runner.run(["systemctl", "reload-or-restart", unit], mutate=True)
 
     def restart(self, unit: str) -> None:
+        # Rapid reconciliations and a failed start can exhaust systemd's StartLimitBurst.
+        # Clearing only this managed unit's counter keeps retry and rollback deterministic.
+        self.runner.run(["systemctl", "reset-failed", unit], mutate=True)
         self.runner.run(["systemctl", "restart", unit], mutate=True)
         if not self.is_active(unit):
             raise StateError(f"{unit} did not become active after restart")

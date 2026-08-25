@@ -22,8 +22,9 @@ FluxGate v0.3.0 is the latest stable early-stage release.
 **Supported sing-box profiles in v0.3.0:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
 Hysteria2/QUIC/TLS.
 
-**Planned/deferred:** Xray-core, TUIC, WebSocket, HTTP/2, gRPC, Reality, Shadowsocks, VMess,
-Pathfinder and automatic profile probing/scoring, and a web UI or 3x-ui integration.
+**Development:** v0.4 is building Secure Client Bootstrap and the offline Pathfinder Foundation.
+It is not released. Xray-core, active network probing/scoring, automatic failover, remote
+enrollment, and a web UI remain deferred.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -74,6 +75,57 @@ registry and capabilities instead of switching on protocol names. Operation plan
 best-effort reverse-order rollback. State and secrets use atomic replacement and restrictive file
 modes. FluxGate providers hold independent forwarding leases and tagged rules inside one owned
 nftables table, so WireGuard and OpenVPN can coexist safely.
+
+## Development v0.4: signed bootstrap and Pathfinder foundation
+
+The v0.4 development tree adds three separate concepts without changing provider runtime paths:
+
+- `ServerIdentity` is a stable, independent Ed25519 signing identity. Its random opaque server UUID
+  and signing key are unrelated to WireGuard, OpenVPN PKI, or the sing-box TLS CA.
+- `ClientBootstrap` is an administrator-generated, mode-0700 directory containing public
+  `trust.json`, exact-byte signed `manifest.json`, exact-byte signed client-specific
+  `bootstrap.json`, and only provider/profile artifacts already provisioned for that client.
+- `PathfinderCandidate` and `ClientCapabilities` support deterministic offline compatibility
+  evaluation. They distinguish system tunnels from local proxies and report missing capabilities.
+
+Example full bundle:
+
+```text
+alice/
+├── trust.json
+├── manifest.json
+├── manifest.sig
+├── bootstrap.json
+├── bootstrap.sig
+├── wireguard/alice.conf
+├── openvpn/alice.ovpn
+└── singbox/{vless,trojan,hysteria2}.json
+```
+
+Initial trust is explicit: an administrator securely transfers the offline bundle and the client
+pins its public signing descriptor. Later metadata must be checked with that separately stored pin;
+an untrusted neighboring `trust.json` is not a substitute. The signing identity authenticates
+metadata from that previously trusted FluxGate identity. It does not prove arbitrary DNS ownership,
+replace TLS verification, encrypt bundle contents, or make manifests replay-proof.
+
+```bash
+sudo fluxgate client bootstrap alice --output ./bootstrap
+fluxgate client bootstrap-verify ./bootstrap/alice
+fluxgate client bootstrap-verify ./bootstrap/alice --pinned-trust ./pinned/trust.json --json
+sudo fluxgate manifest export-signed --output ./signed-manifest
+fluxgate manifest verify ./signed-manifest --pinned-trust ./pinned/trust.json
+fluxgate pathfinder evaluate --manifest ./signed-manifest/manifest.json \
+  --signature ./signed-manifest/manifest.sig --trust ./pinned/trust.json \
+  --capabilities examples/capabilities/desktop-full.json --json
+```
+
+Provider artifacts contain private keys, certificates, or bearer credentials. Signatures provide
+authenticity and integrity, not confidentiality; bootstrap directories must be transferred and
+stored as secrets. Revocation prevents future server use but cannot erase a previously copied
+static bundle.
+
+Pathfinder v0.4 performs no network I/O, probing, latency or loss measurement, scoring, connection
+selection, automatic failover, censorship detection, remote manifest fetching, or enrollment.
 
 ## Installation
 
@@ -223,10 +275,12 @@ path.
 - **0.1:** architecture, CLI, configuration/state, doctor, WireGuard
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
-- **0.4:** Xray-core and subscription exporters
+- **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (development)
 - **0.5:** AmneziaWG and resilience profiles
-- **Later:** TUIC, WebSocket/HTTP2/gRPC transports, Reality, OpenConnect, optional 3x-ui
-  integration, dashboard, backup/restore, multi-node management, and health-based selection
+- **Later:** active Pathfinder probing/scoring/failover, remote enrollment and manifests,
+  signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,
+  CDN/fronting, censorship detection, GUI/mobile clients, optional 3x-ui integration, and
+  multi-node management
 
 No roadmap item is represented as working before it is implemented and tested.
 

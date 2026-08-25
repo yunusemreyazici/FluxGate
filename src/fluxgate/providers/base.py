@@ -22,6 +22,7 @@ from fluxgate.core.models import (
 )
 from fluxgate.core.paths import PathLayout
 from fluxgate.core.state import StateStore
+from fluxgate.pathfinder.models import ConnectionMode
 from fluxgate.system.firewall import FirewallManager
 from fluxgate.system.forwarding import ForwardingManager
 from fluxgate.system.networking import NetworkInspector
@@ -47,6 +48,7 @@ class CoreProvider(ABC):
     name: str
     display_name: str
     capabilities: frozenset[ProviderCapability] = frozenset()
+    connection_mode: ConnectionMode | None = None
 
     def __init__(self, context: OperationContext) -> None:
         self.context = context

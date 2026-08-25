@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "supported_connection_modes": ["local_proxy"],
+  "supported_features": ["managed_ca"],
+  "supported_ip_families": ["ipv4"],
+  "supported_protocols": ["vless", "trojan"],
+  "supported_providers": ["singbox"],
+  "supported_security": ["tls"],
+  "supported_transports": ["tcp"]
+}

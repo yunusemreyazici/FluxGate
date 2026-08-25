@@ -23,6 +23,7 @@ def doctor_command(
             application.providers,
             detect_os(),
             application.context.forwarding,
+            application.identity,
         ).run()
         if json_output:
             typer.echo(report.model_dump_json(indent=2))

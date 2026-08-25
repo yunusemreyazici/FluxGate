@@ -106,6 +106,14 @@ class PathLayout:
         return self.secrets_dir / "sing-box-tls"
 
     @property
+    def server_identity_dir(self) -> Path:
+        return self.secrets_dir / "server-identity"
+
+    @property
+    def server_identity_lock_file(self) -> Path:
+        return self.data_dir / "server-identity.lock"
+
+    @property
     def singbox_unit_file(self) -> Path:
         return self.systemd_dir / "fluxgate-singbox.service"
 

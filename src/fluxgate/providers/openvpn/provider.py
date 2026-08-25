@@ -23,6 +23,7 @@ from fluxgate.core.models import (
 )
 from fluxgate.core.operations import OperationPlan
 from fluxgate.core.state import atomic_write
+from fluxgate.pathfinder.models import ConnectionMode
 from fluxgate.providers.base import CoreProvider
 from fluxgate.providers.openvpn.health import openvpn_health
 from fluxgate.providers.openvpn.pki import IssuedCertificate, OpenVPNPKI
@@ -46,6 +47,7 @@ class DirectoryCheckpoint:
 class OpenVPNProvider(CoreProvider):
     name = "openvpn"
     display_name = "OpenVPN"
+    connection_mode = ConnectionMode.SYSTEM_TUNNEL
     capabilities = frozenset(
         {
             ProviderCapability.ADD_CLIENTS,

@@ -10,6 +10,7 @@ from fluxgate.cli.config import config_app
 from fluxgate.cli.core import core_app
 from fluxgate.cli.doctor import doctor_command
 from fluxgate.cli.manifest import manifest_app
+from fluxgate.cli.pathfinder import pathfinder_app
 from fluxgate.cli.profile import profile_app
 from fluxgate.cli.status import status_command, version_command
 from fluxgate.cli.system import system_app
@@ -21,6 +22,7 @@ app.add_typer(profile_app, name="profile")
 app.add_typer(config_app, name="config")
 app.add_typer(system_app, name="system")
 app.add_typer(manifest_app, name="manifest")
+app.add_typer(pathfinder_app, name="pathfinder")
 app.command("version")(version_command)
 app.command("status")(status_command)
 app.command("doctor")(doctor_command)

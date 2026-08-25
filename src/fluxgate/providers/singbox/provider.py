@@ -30,6 +30,7 @@ from fluxgate.core.models import (
 )
 from fluxgate.core.operations import OperationPlan
 from fluxgate.core.state import atomic_write
+from fluxgate.pathfinder.models import ConnectionMode
 from fluxgate.providers.base import CoreProvider
 from fluxgate.providers.singbox.rendering import render_client, render_server
 from fluxgate.providers.singbox.tls import ManagedTLSIdentityManager, TLSIdentity
@@ -39,6 +40,7 @@ from fluxgate.system.packages import SING_BOX_VERSION
 class SingBoxProvider(CoreProvider):
     name = "singbox"
     display_name = "sing-box"
+    connection_mode = ConnectionMode.LOCAL_PROXY
     capabilities = frozenset(
         {
             ProviderCapability.MANAGE_PROFILES,

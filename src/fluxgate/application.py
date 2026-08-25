@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fluxgate.bootstrap import BootstrapService
 from fluxgate.clients import ClientService
 from fluxgate.core.commands import CommandRunner
 from fluxgate.core.config import AppConfig, load_config
 from fluxgate.core.paths import PathLayout
 from fluxgate.core.registry import ProviderRegistry
 from fluxgate.core.state import StateStore
+from fluxgate.identity import ServerIdentityManager
+from fluxgate.manifest import SignedManifestService
 from fluxgate.profiles import ProfileService
 from fluxgate.providers.base import OperationContext
 from fluxgate.providers.openvpn import OpenVPNProvider
@@ -32,6 +35,9 @@ class Application:
     clients: ClientService
     profiles: ProfileService
     context: OperationContext
+    identity: ServerIdentityManager
+    signed_manifests: SignedManifestService
+    bootstrap: BootstrapService
 
 
 def build_application(*, dry_run: bool = False) -> Application:
@@ -59,12 +65,17 @@ def build_application(*, dry_run: bool = False) -> Application:
             XrayProvider(context),
         ]
     )
+    clients = ClientService(state, providers)
+    identity = ServerIdentityManager(paths)
     return Application(
         config,
         paths,
         state,
         providers,
-        ClientService(state, providers),
+        clients,
         ProfileService(state, providers),
         context,
+        identity,
+        SignedManifestService(config, state, identity),
+        BootstrapService(config, state, providers, clients, identity),
     )

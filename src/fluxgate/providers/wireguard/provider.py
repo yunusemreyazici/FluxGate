@@ -21,6 +21,7 @@ from fluxgate.core.models import (
 )
 from fluxgate.core.operations import OperationPlan
 from fluxgate.core.state import atomic_write
+from fluxgate.pathfinder.models import ConnectionMode
 from fluxgate.providers.base import CoreProvider
 from fluxgate.providers.wireguard.health import wireguard_health
 from fluxgate.providers.wireguard.keys import WireGuardKeys
@@ -36,6 +37,7 @@ from fluxgate.providers.wireguard.rendering import (
 class WireGuardProvider(CoreProvider):
     name = "wireguard"
     display_name = "WireGuard"
+    connection_mode = ConnectionMode.SYSTEM_TUNNEL
     capabilities = frozenset(
         {
             ProviderCapability.ADD_CLIENTS,

@@ -35,6 +35,11 @@ def main() -> None:
             "fluxgate/providers/singbox/provider.py",
             "fluxgate/providers/singbox/rendering.py",
             "fluxgate/providers/singbox/tls.py",
+            "fluxgate/identity/service.py",
+            "fluxgate/manifest/service.py",
+            "fluxgate/bootstrap/service.py",
+            "fluxgate/pathfinder/service.py",
+            "fluxgate/cli/pathfinder.py",
         ):
             assert required in wheel_names, f"0.3 module missing from wheel: {required}"
         assert not any(name.startswith("tests/") for name in wheel_names)
@@ -46,6 +51,7 @@ def main() -> None:
         entries = archive.read(entry_name).decode()
         assert "License-File: LICENSE" in metadata
         assert "Project-URL: Repository, https://github.com/yunusemreyazici/FluxGate" in metadata
+        assert "Requires-Dist: cryptography<51,>=46" in metadata
         assert "fluxgate = fluxgate.cli.app:app" in entries
 
     with tarfile.open(sdists[0], "r:gz") as archive:

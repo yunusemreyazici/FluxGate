@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Yunus Emre YAZICI" }]
 dependencies = [
+  "cryptography>=46,<51",
   "pydantic>=2.8,<3",
   "tomli>=2.0,<3; python_version < '3.11'",
   "typer>=0.12,<1",

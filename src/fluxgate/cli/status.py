@@ -5,7 +5,7 @@ import typer
 from fluxgate import __version__
 from fluxgate.application import build_application
 from fluxgate.cli.common import fail
-from fluxgate.core.errors import FluxGateError
+from fluxgate.core.errors import FluxGateError, IdentityError
 from fluxgate.core.models import ProviderStatus
 from fluxgate.system.os import detect_os
 
@@ -48,5 +48,14 @@ def status_command() -> None:
         profiles = application.profiles.list()
         typer.echo(f"Total        {len(profiles)}")
         typer.echo(f"Enabled      {sum(profile.enabled for profile in profiles)}")
+        typer.echo("\nSERVER IDENTITY")
+        try:
+            identity = application.identity.load_optional()
+            typer.echo(f"State        {'healthy' if identity is not None else 'not initialized'}")
+            if identity is not None:
+                typer.echo(f"Server ID    {identity.metadata.server_id}")
+                typer.echo(f"Key ID       {identity.metadata.key_id}")
+        except IdentityError:
+            typer.echo("State        degraded")
     except FluxGateError as error:
         fail(error)

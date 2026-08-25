@@ -13,6 +13,14 @@ class StateError(FluxGateError):
     """Persistent state is invalid or cannot be safely changed."""
 
 
+class IdentityError(FluxGateError):
+    """The managed server signing identity is unsafe or invalid."""
+
+
+class VerificationError(FluxGateError):
+    """A signed artifact or bootstrap bundle failed verification."""
+
+
 class ProviderError(FluxGateError):
     """A provider operation failed."""
 

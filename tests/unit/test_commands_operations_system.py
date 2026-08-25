@@ -359,6 +359,16 @@ def test_systemd_enable_failure_restores_prior_enablement_and_activity() -> None
     assert ("systemctl", "stop", "wg-quick@fg0.service") in runner.commands
 
 
+def test_systemd_restart_clears_only_the_target_unit_failure_counter() -> None:
+    runner = RecordingRunner()
+    services = SystemdServiceManager(runner)  # type: ignore[arg-type]
+    services.restart("fluxgate-singbox.service")
+    assert runner.commands[:2] == [
+        ("systemctl", "reset-failed", "fluxgate-singbox.service"),
+        ("systemctl", "restart", "fluxgate-singbox.service"),
+    ]
+
+
 class FailedSystemdRollbackRunner(PartialSystemdRunner):
     def run(self, args, **kwargs):
         command = tuple(args)

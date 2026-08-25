@@ -5,6 +5,25 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+### Added
+
+- Independent protected Ed25519 server signing identity and exact-byte detached signatures for
+  secret-free capability manifests.
+- Transactional client bootstrap bundles with pinned public trust, signed artifact inventories,
+  SHA-256 provider artifact verification, and offline verification.
+- Typed provider/profile candidates, typed client capabilities, and a deterministic, network-free
+  Pathfinder compatibility evaluator with explicit rejection reasons.
+
+### Security
+
+- Fail-closed signing identity and bundle path ownership, permission, symlink, hard-link,
+  traversal, corruption, tamper, and atomic rollback protections.
+
+### Fixed
+
+- Clear only the target managed systemd unit's failure counter before restart so rapid legitimate
+  profile reconciliation and rollback recover from `StartLimitBurst` exhaustion.
+
 ## [0.3.0] - 2026-08-25
 
 ### Added

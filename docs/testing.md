@@ -82,3 +82,34 @@ For OpenVPN, prepare the exact process/interface teardown before changing routes
 strict short timeouts, confirm the session is no longer functional, and immediately stop the
 temporary OpenVPN client before any further network-dependent command. Do not import the test
 profile into a persistent GUI or modify unrelated VPN profiles.
+
+## v0.4 development validation
+
+The new unit suite uses real Ed25519 operations and covers first-use/reuse, exact-byte signatures,
+malformed Base64 and schemas, wrong keys and IDs, key mismatch/corruption, unsafe modes, direct and
+ancestor links, hard links, first-use races, and non-mutating dry runs. Bootstrap tests cover all
+seven WireGuard/OpenVPN/sing-box provider combinations, disabled or unprovisioned credentials,
+pinned trust, every signed document and provider artifact tamper, transactional
+write/swap/post-verification failures, unmanaged destinations, and simultaneous replacements.
+Pathfinder tests are pure and deterministic.
+
+The upstream sing-box v1.13.19 parser gate remains separate: set `SING_BOX_TEST_BINARY` to the
+checksum-verified binary and run the full suite. Existing v0.3 production data-path evidence remains
+the evidence for real WireGuard, OpenVPN, and sing-box connectivity; v0.4 validation adds signing,
+bundle generation, Linux verification, and offline macOS tamper verification without modifying the
+Mac default route or DNS.
+
+Focused Ubuntu 24.04 validation created and reused one stable protected signing identity, verified
+doctor/status health, signed and pinned a manifest, rejected exact-byte tampering, and atomically
+replaced a full temporary bootstrap containing exactly WireGuard, OpenVPN, VLESS, Trojan, and
+Hysteria2 artifacts. Both signatures, all hashes, server/key identities, Bob isolation, and cleanup
+passed. Rapid profile reconciliation exposed systemd start-limit exhaustion; the scoped
+`reset-failed` recovery fix was regression-tested and then passed on the host. Bob, the empty
+profile baseline, three running provider services, forwarding, and owned nftables rules were
+preserved. A reboot was unnecessary because the identity is durable protected filesystem state and
+no v0.4 daemon or boot-time behavior was introduced.
+
+The protected bundle was copied to macOS and verified with its separately pinned trust descriptor.
+Disposable changes to the manifest, bootstrap descriptor, a sing-box artifact, the WireGuard
+artifact, and bundled trust were each rejected. This test created no tunnel, route, DNS change, or
+network probe; all Mac and VPS temporary bundles were deleted afterward.

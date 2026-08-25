@@ -11,10 +11,12 @@ from pydantic import Field
 
 from fluxgate.core.compat import StrEnum
 from fluxgate.core.config import load_config
+from fluxgate.core.errors import IdentityError
 from fluxgate.core.models import HealthLevel, StrictModel
 from fluxgate.core.paths import PathLayout
 from fluxgate.core.registry import ProviderRegistry
 from fluxgate.core.state import StateStore
+from fluxgate.identity import ServerIdentityManager
 from fluxgate.system.forwarding import ForwardingManager
 from fluxgate.system.os import OperatingSystem
 
@@ -50,12 +52,14 @@ class Doctor:
         providers: ProviderRegistry,
         operating_system: OperatingSystem,
         forwarding: ForwardingManager,
+        identity: ServerIdentityManager | None = None,
     ) -> None:
         self.paths = paths
         self.state = state
         self.providers = providers
         self.os = operating_system
         self.forwarding = forwarding
+        self.identity = identity or ServerIdentityManager(paths)
 
     def run(self) -> HealthReport:
         checks: list[HealthCheck] = []
@@ -177,6 +181,27 @@ class Doctor:
                     f"{'accepted' if owner_ok else 'must be root'}",
                 )
             )
+        try:
+            identity = self.identity.load_optional()
+            if identity is None:
+                identity_severity = HealthSeverity.INFO
+                identity_message = "server signing identity not initialized"
+            else:
+                identity_severity = HealthSeverity.SUCCESS
+                identity_message = (
+                    f"server signing identity healthy; key ID {identity.metadata.key_id}"
+                )
+        except IdentityError as error:
+            identity_severity = HealthSeverity.FAILURE
+            identity_message = f"server signing identity invalid: {error}"
+        checks.append(
+            HealthCheck(
+                section="FluxGate",
+                name="server-signing-identity",
+                severity=identity_severity,
+                message=identity_message,
+            )
+        )
         for provider in self.providers.all():
             severity_map = {
                 HealthLevel.SUCCESS: HealthSeverity.SUCCESS,

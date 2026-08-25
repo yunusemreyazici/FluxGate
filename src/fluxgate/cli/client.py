@@ -9,10 +9,55 @@ from typing import Annotated
 import typer
 
 from fluxgate.application import build_application
+from fluxgate.bootstrap import verify_bootstrap
 from fluxgate.cli.common import fail, require_root, safe_client
 from fluxgate.core.errors import FluxGateError
+from fluxgate.manifest.service import load_trust
 
 client_app = typer.Typer(help="Manage provider-independent clients.", no_args_is_help=True)
+
+
+@client_app.command("bootstrap")
+def client_bootstrap(
+    identity: Annotated[str, typer.Argument(help="Client name or UUID.")],
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Parent directory for the bootstrap bundle.")
+    ] = Path("."),
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Create an authenticated, transactional multi-provider bootstrap bundle."""
+    try:
+        application = build_application(dry_run=dry_run)
+        require_root(application, dry_run=dry_run)
+        path = application.bootstrap.export(identity, output, dry_run=dry_run)
+        prefix = "Dry-run: would create" if dry_run else "Created"
+        typer.echo(f"{prefix} bootstrap bundle {path}")
+    except FluxGateError as error:
+        fail(error)
+
+
+@client_app.command("bootstrap-verify")
+def client_bootstrap_verify(
+    bundle: Annotated[Path, typer.Argument(help="Bootstrap bundle directory.")],
+    pinned_trust: Annotated[
+        Path | None,
+        typer.Option("--pinned-trust", help="Previously pinned trust.json descriptor."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit secret-free JSON.")] = False,
+) -> None:
+    """Verify exact signatures and every declared provider artifact."""
+    try:
+        trust = load_trust(pinned_trust) if pinned_trust is not None else None
+        result = verify_bootstrap(bundle, pinned_trust=trust)
+        if json_output:
+            typer.echo(result.model_dump_json(indent=2))
+        else:
+            typer.echo(
+                f"Bootstrap verified ({result.trust_mode}): "
+                f"{result.client_name}, {result.artifact_count} artifacts"
+            )
+    except FluxGateError as error:
+        fail(error)
 
 
 @client_app.command("list")
