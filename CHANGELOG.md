@@ -5,32 +5,39 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
-### Added
+## [0.4.0] - 2026-08-26
 
-- Independent protected Ed25519 server signing identity and exact-byte detached signatures for
-  secret-free capability manifests.
-- Transactional client bootstrap bundles with pinned public trust, signed artifact inventories,
-  SHA-256 provider artifact verification, and offline verification.
-- Typed provider/profile candidates, typed client capabilities, and a deterministic, network-free
-  Pathfinder compatibility evaluator with explicit rejection reasons.
+### Secure Client Bootstrap
 
-### Security
+- Added an independent Ed25519 FluxGate signing identity with a stable opaque server UUID, public
+  trust descriptor, and explicit pinned-public-key verification.
+- Added exact-byte signed capability manifests, detached Ed25519 signatures, and signed
+  client-specific bootstrap descriptors.
+- Added per-artifact SHA-256 verification and an exact bootstrap-to-manifest digest binding that
+  prevents mixing otherwise valid signed generations inside one bundle.
+- Added WireGuard, OpenVPN, and sing-box multi-provider client bundles with closed inventories and
+  cross-client credential isolation.
+- Added transactional whole-directory publication and deterministic ASCII-safe UUID-based
+  physical artifact names while retaining display names as metadata.
 
-- Fail-closed signing identity and bundle path ownership, permission, symlink, hard-link,
-  traversal, corruption, tamper, and atomic rollback protections.
+### Pathfinder Foundation
 
-### Fixed
+- Added typed `ConnectionCandidate` and `ClientCapabilities` models with explicit
+  `SYSTEM_TUNNEL` and `LOCAL_PROXY` modes.
+- Added provider-independent capability requirements, deterministic compatibility evaluation, and
+  human-readable incompatibility reasons.
+- Added candidates for WireGuard, OpenVPN, VLESS/TCP/TLS, Trojan/TCP/TLS, and
+  Hysteria2/QUIC/TLS.
 
-- Bind each signed bootstrap descriptor to the exact signed manifest generation and reject
-  case-folded artifact path collisions.
-- Use stable ASCII UUID-based physical bootstrap names without changing legacy provider exports.
-- Keep a durably committed replacement when obsolete publication-backup cleanup fails, while
-  retaining exact rollback before the commit point.
-- Refuse enabled manifest candidates without a configured endpoint and aggregate an invalid
-  initialized signing identity into top-level status.
-- Check writable ancestors even when a protected identity or publication destination already
-  exists.
-- Clear only the target managed systemd unit's failure counter before restart so rapid legitimate
+### Hardening
+
+- Established an explicit durable publication commit boundary; stale-backup cleanup can no longer
+  destroy or roll back a committed replacement.
+- Added Unicode- and case-insensitive-filesystem-safe bootstrap naming, case-folded collision
+  rejection, exact generation-mixing rejection, and closed artifact inventory enforcement.
+- Added enabled-candidate endpoint validation, corrupt signing-identity status aggregation, and
+  writable-ancestor, symlink, hard-link, file-type, permission, and ownership checks.
+- Cleared only the target managed systemd unit's failure counter before restart so rapid legitimate
   profile reconciliation and rollback recover from `StartLimitBurst` exhaustion.
 
 ## [0.3.0] - 2026-08-25

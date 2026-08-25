@@ -15,16 +15,19 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate v0.3.0 is the latest stable early-stage release.
+FluxGate v0.4.0 is the latest stable early-stage release.
 
 **Supported cores/providers:** WireGuard, OpenVPN UDP, and sing-box.
 
-**Supported sing-box profiles in v0.3.0:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
+**Supported sing-box profiles:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
 Hysteria2/QUIC/TLS.
 
-**Development:** v0.4 is building Secure Client Bootstrap and the offline Pathfinder Foundation.
-It is not released. Xray-core, active network probing/scoring, automatic failover, remote
-enrollment, and a web UI remain deferred.
+**Pathfinder compatibility candidates:** WireGuard, OpenVPN, VLESS, Trojan, and Hysteria2.
+
+FluxGate v0.4.0 includes Secure Client Bootstrap and the offline Pathfinder compatibility
+foundation. Active probing, scoring/ranking, automatic selection/failover, remote enrollment and
+manifest retrieval, anti-replay/freshness policy, signing-key rotation, Xray-core, TUIC,
+WebSocket/HTTP/2/gRPC, Reality, and GUI/mobile applications remain deferred.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -48,6 +51,20 @@ reboot recovery. Ubuntu 22.04 and Debian 12 remain supported by design and CI/ru
 their complete privileged lifecycle has not yet been exercised.
 
 ## Architecture
+
+```text
+FluxGate Server
+├── WireGuard
+├── OpenVPN
+├── sing-box
+│   ├── VLESS / TCP / TLS
+│   ├── Trojan / TCP / TLS
+│   └── Hysteria2 / QUIC / TLS
+└── Signed Capability Manifest
+    └── Secure Client Bootstrap
+        └── Pathfinder Compatibility
+            └── Future Active Pathfinder (not implemented)
+```
 
 ```text
 CLI (presentation only)
@@ -76,17 +93,20 @@ best-effort reverse-order rollback. State and secrets use atomic replacement and
 modes. FluxGate providers hold independent forwarding leases and tagged rules inside one owned
 nftables table, so WireGuard and OpenVPN can coexist safely.
 
-## Development v0.4: signed bootstrap and Pathfinder foundation
+## FluxGate v0.4: signed bootstrap and Pathfinder foundation
 
-The v0.4 development tree adds three separate concepts without changing provider runtime paths:
+FluxGate v0.4 adds three separate concepts without changing provider runtime paths:
 
 - `ServerIdentity` is a stable, independent Ed25519 signing identity. Its random opaque server UUID
   and signing key are unrelated to WireGuard, OpenVPN PKI, or the sing-box TLS CA.
 - `ClientBootstrap` is an administrator-generated, mode-0700 directory containing public
   `trust.json`, exact-byte signed `manifest.json`, exact-byte signed client-specific
   `bootstrap.json`, and only provider/profile artifacts already provisioned for that client.
-- `PathfinderCandidate` and `ClientCapabilities` support deterministic offline compatibility
+- `ConnectionCandidate` and `ClientCapabilities` support deterministic offline compatibility
   evaluation. They distinguish system tunnels from local proxies and report missing capabilities.
+
+The server signing identity is separate from the sing-box TLS identity, WireGuard identity, and
+OpenVPN PKI. None of those protocol identities is reused as the FluxGate metadata-signing key.
 
 Example full bundle (physical names use stable UUIDs rather than display names):
 
@@ -102,11 +122,28 @@ client-10000000000000000000000000000001/
 └── singbox/profile-<profile-id-without-hyphens>.json
 ```
 
-Initial trust is explicit: an administrator securely transfers the offline bundle and the client
-pins its public signing descriptor. Later metadata must be checked with that separately stored pin;
-an untrusted neighboring `trust.json` is not a substitute. The signing identity authenticates
-metadata from that previously trusted FluxGate identity. It does not prove arbitrary DNS ownership,
-replace TLS verification, encrypt bundle contents, or make manifests replay-proof.
+The public `trust.json` identifies the FluxGate signing key. `manifest.json` is secret-free server
+candidate metadata and `manifest.sig` authenticates its exact bytes. The client-specific
+`bootstrap.json` describes the bundle, binds the exact manifest digest, and inventories every
+provider/profile artifact; `bootstrap.sig` authenticates that exact descriptor. Provider/profile
+files contain the actual client credentials.
+
+Physical bundle names use stable opaque client/profile UUIDs rather than display names. Display
+names remain signed metadata. This avoids Unicode portability problems, case-insensitive
+filesystem collisions, and rename-driven changes to physical artifact identity.
+
+### Initial trust
+
+An administrator explicitly generates and securely transfers a bootstrap bundle containing the
+public FluxGate signing trust descriptor. The administrator or client explicitly accepts and pins
+that identity through a trusted process.
+
+### Subsequent trust
+
+Later metadata must be verified against the separately stored pin. An adjacent `trust.json` is not
+automatically trustworthy. The signing identity authenticates metadata from the pinned FluxGate
+identity; it does not prove ownership of an arbitrary DNS hostname, and TLS hostname verification
+remains independent. Signing does not encrypt bootstrap contents or make manifests replay-proof.
 The signed bootstrap descriptor hashes the exact `manifest.json` bytes so two valid generations
 cannot be mixed into one accepted bundle. This is snapshot consistency, not replay prevention.
 
@@ -127,8 +164,11 @@ authenticity and integrity, not confidentiality; bootstrap directories must be t
 stored as secrets. Revocation prevents future server use but cannot erase a previously copied
 static bundle.
 
-Pathfinder v0.4 performs no network I/O, probing, latency or loss measurement, scoring, connection
-selection, automatic failover, censorship detection, remote manifest fetching, or enrollment.
+Pathfinder v0.4 is a pure compatibility/planning foundation. It accepts signed server candidate
+metadata plus client capabilities and returns compatible/incompatible candidates with explicit
+rejection reasons. It performs no reachability or DNS/socket probing, latency, packet-loss or
+reconnect measurement, performance scoring, ranking, automatic selection, fallback/failover, or
+censorship detection.
 
 ## Installation
 
@@ -199,7 +239,7 @@ Unknown fields and unsupported schema versions are rejected. `FLUXGATE_CONFIG_DI
 `FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
 `FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_OPENVPN_DIR`, `FLUXGATE_SYSCTL_DIR`,
 `FLUXGATE_NFTABLES_DIR`, and
-`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. FluxGate v0.3.0 also
+`FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. FluxGate also
 accepts `FLUXGATE_LOCAL_LIB_DIR` for its versioned managed sing-box binary. Values must be
 absolute, traversal-free, and contain no whitespace or control characters.
 
@@ -278,7 +318,7 @@ path.
 - **0.1:** architecture, CLI, configuration/state, doctor, WireGuard
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
-- **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (development)
+- **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
 - **0.5:** AmneziaWG and resilience profiles
 - **Later:** active Pathfinder probing/scoring/failover, remote enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,

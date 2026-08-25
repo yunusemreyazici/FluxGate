@@ -29,7 +29,10 @@ def main() -> None:
         assert "fluxgate/cli/app.py" in wheel_names
         for required in (
             "fluxgate/cli/manifest.py",
+            "fluxgate/bootstrap/models.py",
+            "fluxgate/bootstrap/service.py",
             "fluxgate/core/manifest.py",
+            "fluxgate/core/publication.py",
             "fluxgate/profiles/catalog.py",
             "fluxgate/profiles/service.py",
             "fluxgate/providers/singbox/provider.py",
@@ -37,11 +40,11 @@ def main() -> None:
             "fluxgate/providers/singbox/tls.py",
             "fluxgate/identity/service.py",
             "fluxgate/manifest/service.py",
-            "fluxgate/bootstrap/service.py",
+            "fluxgate/pathfinder/models.py",
             "fluxgate/pathfinder/service.py",
             "fluxgate/cli/pathfinder.py",
         ):
-            assert required in wheel_names, f"0.3 module missing from wheel: {required}"
+            assert required in wheel_names, f"0.4 module missing from wheel: {required}"
         assert not any(name.startswith("tests/") for name in wheel_names)
         metadata_name = next(name for name in wheel_names if name.endswith(".dist-info/METADATA"))
         entry_name = next(
@@ -58,6 +61,8 @@ def main() -> None:
         sdist_names = {member.name for member in archive.getmembers()}
         assert_safe(sdist_names)
         assert any(name.endswith("/README.md") for name in sdist_names)
+        assert any(name.endswith("/SECURITY.md") for name in sdist_names)
+        assert any(name.endswith("/CHANGELOG.md") for name in sdist_names)
         assert any(name.endswith("/LICENSE") for name in sdist_names)
         assert any(name.endswith("/pyproject.toml") for name in sdist_names)
         assert any(name.endswith("/src/fluxgate/cli/app.py") for name in sdist_names)

@@ -28,7 +28,7 @@ Private keys and generated client files are written with mode `0600`. Atomic wri
 symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
 DNS, and safe distribution and revocation of client configurations.
 
-FluxGate v0.3.0 adds a FluxGate-owned TLS CA and versioned sing-box server
+FluxGate includes a FluxGate-owned TLS CA and versioned sing-box server
 identity. Its standalone proxy exports embed the public CA but also contain bearer credentials;
 store and distribute them as secrets. FluxGate does not reuse the OpenVPN PKI, enable insecure TLS,
 or adopt foreign sing-box configuration, units, or TLS directories. The pinned managed binary is
@@ -38,15 +38,16 @@ pairing, the trust chain, validity, constraints, SAN identity, and restrictive p
 DNS identities use OpenSSL hostname verification and literal IP identities use OpenSSL IP
 verification. Standalone client configurations never set `insecure=true`.
 
-WireGuard, OpenVPN UDP, and sing-box are supported in v0.3.0. Xray-core, TUIC, additional
+WireGuard, OpenVPN UDP, and sing-box are supported in v0.4.0. Xray-core, TUIC, additional
 transports, Reality, active Pathfinder probing, web management, and other roadmap integrations
 remain unsupported.
 
-## v0.4 development signing and bootstrap model
+## v0.4 signing and bootstrap model
 
-The development tree uses a dedicated Ed25519 server signing identity. It is generated from a
-cryptographic random source, stored in a FluxGate-owned mode-0700 directory, and keeps its raw
-private key in a mode-0600 regular file. It is independent of every VPN key and TLS PKI. Unsafe
+FluxGate uses Ed25519 from the established `cryptography` implementation for a dedicated server
+signing identity. Its server UUID and key are generated independently from cryptographic random
+sources. The identity is stored in a FluxGate-owned mode-0700 directory and keeps its raw private
+key in a mode-0600 regular file. It is independent of every VPN key and TLS PKI. Unsafe
 ownership, modes, symlinks, hard links, corrupt key bytes, or a public/private mismatch fail closed;
 FluxGate never silently regenerates a corrupt identity because that would break pinned trust.
 Existing protected roots do not hide unsafe writable ancestors; sticky shared temporary-directory

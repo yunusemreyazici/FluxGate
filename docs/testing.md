@@ -83,7 +83,17 @@ strict short timeouts, confirm the session is no longer functional, and immediat
 temporary OpenVPN client before any further network-dependent command. Do not import the test
 profile into a persistent GUI or modify unrelated VPN profiles.
 
-## v0.4 development validation
+## v0.4.0 validation
+
+### v0.3 data-path evidence
+
+FluxGate v0.4 retains the previously collected real data-path evidence: WireGuard and OpenVPN
+full-tunnel connectivity plus VLESS, Trojan, and Hysteria2 proxy connectivity; authentication and
+assigned addresses; IPv4 egress and DNS; service restart and reboot persistence; and selective
+revocation enforcement. A duplicate full VPN end-to-end run was not required for the v0.4
+control/bootstrap-only additions.
+
+### v0.4 control/bootstrap evidence
 
 The new unit suite uses real Ed25519 operations and covers first-use/reuse, exact-byte signatures,
 malformed Base64 and schemas, wrong keys and IDs, key mismatch/corruption, unsafe modes, direct and
@@ -95,7 +105,7 @@ Review regression coverage additionally rejects mixed valid manifest/bootstrap g
 case-folded paths, empty enabled endpoints, cross-client credential mixing, and unsafe writable
 ancestors. Publication failure injection distinguishes exact rollback before parent-directory
 fsync from committed-new-tree retention during first or partial stale-backup cleanup failures.
-Pathfinder tests are pure and deterministic.
+Pathfinder tests are pure, deterministic, and verified to perform no network operations.
 
 The upstream sing-box v1.13.19 parser gate remains separate: set `SING_BOX_TEST_BINARY` to the
 checksum-verified binary and run the full suite. Existing v0.3 production data-path evidence remains
