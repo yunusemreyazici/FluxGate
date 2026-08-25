@@ -15,11 +15,11 @@ class NetworkInspector(Protocol):
 
     def conflicting_route(self, network: ipaddress.IPv4Network, interface: str) -> str | None: ...
 
-    def udp_port_available(self, port: int) -> bool: ...
+    def udp_port_available(self, port: int, address: str = "0.0.0.0") -> bool: ...  # noqa: S104
 
     def udp_listener_present(self, port: int) -> bool: ...
 
-    def tcp_port_available(self, port: int) -> bool: ...
+    def tcp_port_available(self, port: int, address: str = "0.0.0.0") -> bool: ...  # noqa: S104
 
     def tcp_listener_present(self, port: int) -> bool: ...
 
@@ -48,10 +48,15 @@ class LinuxNetworkInspector:
                 return line
         return None
 
-    def udp_port_available(self, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+    def udp_port_available(
+        self,
+        port: int,
+        address: str = "0.0.0.0",  # noqa: S104
+    ) -> bool:
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        with socket.socket(family, socket.SOCK_DGRAM) as probe:
             try:
-                probe.bind(("0.0.0.0", port))  # noqa: S104
+                probe.bind((address, port))
             except OSError:
                 return False
         return True
@@ -63,11 +68,16 @@ class LinuxNetworkInspector:
         endpoint = re.compile(rf"(?:^|[\s\]])[^\s]*:{port}(?:\s|$)")
         return any(endpoint.search(line) for line in result.stdout.splitlines())
 
-    def tcp_port_available(self, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    def tcp_port_available(
+        self,
+        port: int,
+        address: str = "0.0.0.0",  # noqa: S104
+    ) -> bool:
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                probe.bind(("0.0.0.0", port))  # noqa: S104
+                probe.bind((address, port))
             except OSError:
                 return False
         return True

@@ -20,6 +20,14 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 - State schema 2 adds stable profile records and profile credentials while losslessly accepting
   v0.2 schema-1 WireGuard/OpenVPN state.
 
+### Fixed
+
+- Made schema-1 migration reject schema-2-only fields instead of silently discarding corrupt
+  data, and made status fail closed on sing-box service, TLS, unit, or config divergence.
+- Refused writable or symlinked managed ancestors before filesystem mutation, verified CA/server
+  key pairing and CA constraints, enforced HTTPS across release redirects, and hardened the
+  sing-box service umask.
+
 ## [0.2.0] - 2026-08-25
 
 ### Added

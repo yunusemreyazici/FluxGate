@@ -247,9 +247,16 @@ class ClientService:
         provider_name: str | None = None,
         profile_identity: str | None = None,
     ) -> list_type[Path]:
+        checked_writable_anchor = False
         for candidate in (destination, *destination.parents):
             if candidate.is_symlink():
                 raise FluxGateError(f"refusing export through symlinked directory: {candidate}")
+            if candidate.exists() and not checked_writable_anchor:
+                checked_writable_anchor = True
+                if stat.S_IMODE(candidate.stat().st_mode) & 0o022:
+                    raise FluxGateError(
+                        f"refusing export through group/world-writable directory: {candidate}"
+                    )
         if destination.exists() and not destination.is_dir():
             raise FluxGateError(f"export parent is not a directory: {destination}")
         with self.state.lock():
@@ -423,12 +430,13 @@ class ClientService:
                         for selected_provider, artifact_filename, _ in artifacts
                         if selected_provider == artifact_provider
                     }
-                    if artifact_provider == "singbox":
-                        expected.update(
-                            f"{profile.name}.json"
-                            for profile in state.profiles
-                            if str(profile.id) in client.profile_credentials
-                        )
+                    artifact_provider_core = self.providers.get(artifact_provider)
+                    expected.update(
+                        artifact_provider_core.profile_export_artifact_name(profile)
+                        for profile in state.profiles
+                        if profile.provider == artifact_provider
+                        and str(profile.id) in client.profile_credentials
+                    )
                     for existing in provider_dir.iterdir():
                         if existing.name in expected:
                             continue

@@ -189,6 +189,11 @@ bearer credentials and must be protected like a VPN private key.
 Subprocesses use argument arrays without `shell=True`, have timeouts, and redact secret-like
 options in logs. See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
+Before the first state-changing 0.3 command, an upgraded schema-1 installation can still run the
+v0.2 application tree. After schema 2 is persisted, v0.2 correctly refuses the future schema; a
+downgrade then requires restoring the operator's pre-upgrade state backup rather than pointing the
+old application at schema-2 state.
+
 ## Development
 
 ```bash
@@ -211,8 +216,8 @@ path.
 - **0.3:** sing-box and protocol profiles
 - **0.4:** Xray-core and subscription exporters
 - **0.5:** AmneziaWG and resilience profiles
-- **Later:** optional native Hysteria2, OpenConnect, 3x-ui integration, dashboard, backup/restore,
-  multi-node management, and health-based selection
+- **Later:** TUIC, WebSocket/HTTP2/gRPC transports, Reality, OpenConnect, optional 3x-ui
+  integration, dashboard, backup/restore, multi-node management, and health-based selection
 
 No roadmap item is represented as working before it is implemented and tested.
 

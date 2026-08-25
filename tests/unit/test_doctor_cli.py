@@ -5,7 +5,14 @@ from typer.testing import CliRunner
 from fluxgate.application import build_application
 from fluxgate.cli.app import app
 from fluxgate.cli.common import safe_client
-from fluxgate.core.models import Client, FluxGateState, ProviderDetection
+from fluxgate.cli.status import overall_state
+from fluxgate.core.models import (
+    Client,
+    FluxGateState,
+    ProviderDetection,
+    ProviderStateName,
+    ProviderStatus,
+)
 from fluxgate.core.registry import ProviderRegistry
 from fluxgate.health import Doctor, HealthSeverity
 from fluxgate.providers.wireguard import WireGuardProvider
@@ -36,6 +43,27 @@ def test_cli_version_and_profiles() -> None:
     profiles = runner.invoke(app, ["profile", "list"])
     assert profiles.exit_code == 0
     assert profiles.stdout == "No profiles.\n"
+
+
+def test_overall_status_treats_missing_or_degraded_enabled_core_as_degraded() -> None:
+    assert (
+        overall_state(
+            [
+                ProviderStatus(
+                    name="singbox",
+                    state=ProviderStateName.NOT_INSTALLED,
+                    enabled=True,
+                )
+            ]
+        )
+        == "degraded"
+    )
+    assert (
+        overall_state(
+            [ProviderStatus(name="singbox", state=ProviderStateName.DISABLED, enabled=False)]
+        )
+        == "healthy"
+    )
 
 
 def test_cli_errors_are_noninteractive_and_return_one() -> None:

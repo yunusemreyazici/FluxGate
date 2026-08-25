@@ -215,13 +215,21 @@ class FakeNetwork:
     def conflicting_route(self, network, interface: str) -> str | None:
         return self.route_conflict
 
-    def udp_port_available(self, port: int) -> bool:
+    def udp_port_available(
+        self,
+        port: int,
+        address: str = "0.0.0.0",  # noqa: S104
+    ) -> bool:
         return port not in self.occupied_ports and port not in self.listening_ports
 
     def udp_listener_present(self, port: int) -> bool:
         return port in self.listening_ports
 
-    def tcp_port_available(self, port: int) -> bool:
+    def tcp_port_available(
+        self,
+        port: int,
+        address: str = "0.0.0.0",  # noqa: S104
+    ) -> bool:
         return port not in self.occupied_ports and port not in self.listening_ports
 
     def tcp_listener_present(self, port: int) -> bool:

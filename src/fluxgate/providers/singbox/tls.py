@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import secrets
 import stat
 from dataclasses import dataclass
@@ -52,11 +53,110 @@ class ManagedTLSIdentityManager:
     def _safe_regular(path: Path, private: bool = False) -> bool:
         if path.is_symlink() or not path.is_file():
             return False
-        mode = stat.S_IMODE(path.stat().st_mode)
+        metadata = path.stat()
+        if private and metadata.st_nlink != 1:
+            return False
+        mode = stat.S_IMODE(metadata.st_mode)
         return mode == (0o600 if private else 0o644)
 
+    def _path_stays_inside_root(self, path: Path) -> bool:
+        try:
+            path.relative_to(self.root)
+        except ValueError:
+            return False
+        for candidate in (path, *path.parents):
+            if candidate == self.root.parent:
+                break
+            if candidate.is_symlink():
+                return False
+        return True
+
+    def _managed_roots_safe(self) -> bool:
+        checked_writable_anchor = False
+        for candidate in (self.root, *self.root.parents):
+            if candidate.is_symlink():
+                return False
+            if candidate.exists() and not checked_writable_anchor:
+                checked_writable_anchor = True
+                if not candidate.is_dir():
+                    return False
+                metadata = candidate.stat()
+                if os.geteuid() == 0 and metadata.st_uid != 0:
+                    return False
+                if stat.S_IMODE(metadata.st_mode) & 0o022:
+                    return False
+        return True
+
+    def _key_matches_certificate(self, key: Path, certificate: Path) -> bool:
+        certificate_public = self.context.runner.run(
+            ["openssl", "x509", "-pubkey", "-noout", "-in", str(certificate)],
+            check=False,
+        )
+        key_public = self.context.runner.run(
+            ["openssl", "pkey", "-pubout", "-in", str(key)],
+            check=False,
+        )
+        return (
+            certificate_public.returncode == 0
+            and key_public.returncode == 0
+            and certificate_public.stdout == key_public.stdout
+        )
+
+    def _ca_valid(self, *, renewal_days: int = 30) -> bool:
+        if not (
+            self._safe_regular(self.ca_key, private=True)
+            and self._safe_regular(self.ca_certificate)
+            and self._path_stays_inside_root(self.ca_key)
+            and self._path_stays_inside_root(self.ca_certificate)
+            and self._key_matches_certificate(self.ca_key, self.ca_certificate)
+        ):
+            return False
+        constraints = self.context.runner.run(
+            [
+                "openssl",
+                "x509",
+                "-noout",
+                "-ext",
+                "basicConstraints",
+                "-in",
+                str(self.ca_certificate),
+            ],
+            check=False,
+        )
+        self_signed = self.context.runner.run(
+            [
+                "openssl",
+                "verify",
+                "-CAfile",
+                str(self.ca_certificate),
+                str(self.ca_certificate),
+            ],
+            check=False,
+        )
+        if (
+            constraints.returncode != 0
+            or "CA:TRUE" not in constraints.stdout
+            or self_signed.returncode != 0
+        ):
+            return False
+        return (
+            self.context.runner.run(
+                [
+                    "openssl",
+                    "x509",
+                    "-checkend",
+                    str(renewal_days * 86400),
+                    "-noout",
+                    "-in",
+                    str(self.ca_certificate),
+                ],
+                check=False,
+            ).returncode
+            == 0
+        )
+
     def _load_current(self) -> TLSIdentity | None:
-        if self.root.is_symlink():
+        if not self._managed_roots_safe():
             return None
         if not self._safe_regular(self.current, private=True):
             return None
@@ -75,18 +175,25 @@ class ManagedTLSIdentityManager:
                 return None
             certificate = self.root / certificate_relative
             private_key = self.root / private_key_relative
-            certificate.relative_to(self.root)
-            private_key.relative_to(self.root)
+            if not self._path_stays_inside_root(certificate) or not self._path_stays_inside_root(
+                private_key
+            ):
+                return None
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return None
         return TLSIdentity(self.ca_certificate, certificate, private_key)
 
     def valid(self, identity: TLSIdentity, hostname: str, *, renewal_days: int = 30) -> bool:
         if not (
-            self._safe_regular(self.ca_key, private=True)
+            self._managed_roots_safe()
+            and self._ca_valid(renewal_days=renewal_days)
             and self._safe_regular(identity.ca_certificate)
             and self._safe_regular(identity.certificate)
             and self._safe_regular(identity.private_key, private=True)
+            and self._path_stays_inside_root(identity.ca_certificate)
+            and self._path_stays_inside_root(identity.certificate)
+            and self._path_stays_inside_root(identity.private_key)
+            and self._key_matches_certificate(identity.private_key, identity.certificate)
         ):
             return False
         if (
@@ -137,14 +244,16 @@ class ManagedTLSIdentityManager:
     def ensure(self, hostname: str) -> TLSIdentity:
         if not hostname:
             raise ProviderError("server.domain is required for managed sing-box TLS")
-        if self.context.paths.secrets_dir.is_symlink() or self.root.is_symlink():
-            raise ProviderError(f"refusing symlinked TLS identity directory: {self.root}")
+        if not self._managed_roots_safe():
+            raise ProviderError(f"refusing unsafe TLS identity path: {self.root}")
         if (
             self.root.exists()
             and any(self.root.iterdir())
             and (
                 self.marker.is_symlink()
                 or not self.marker.is_file()
+                or self.marker.stat().st_nlink != 1
+                or stat.S_IMODE(self.marker.stat().st_mode) != 0o600
                 or self.marker.read_bytes() != self.OWNER
             )
         ):
@@ -184,6 +293,10 @@ class ManagedTLSIdentityManager:
                 ]
             )
             atomic_write(self.ca_certificate, certificate, 0o644)
+        if not self._ca_valid():
+            raise ProviderError(
+                "managed sing-box CA identity is invalid, mismatched, or near expiry"
+            )
         identity = self._load_current()
         if identity is not None and self.valid(identity, hostname):
             return identity
@@ -208,6 +321,12 @@ class ManagedTLSIdentityManager:
                 f"/CN={hostname}",
                 "-addext",
                 f"subjectAltName={san}",
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+                "-addext",
+                "keyUsage=critical,digitalSignature,keyEncipherment",
+                "-addext",
+                "extendedKeyUsage=serverAuth",
             ]
         )
         certificate = self._run(

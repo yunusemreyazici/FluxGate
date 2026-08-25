@@ -6,12 +6,23 @@ from fluxgate import __version__
 from fluxgate.application import build_application
 from fluxgate.cli.common import fail
 from fluxgate.core.errors import FluxGateError
+from fluxgate.core.models import ProviderStatus
 from fluxgate.system.os import detect_os
 
 
 def version_command() -> None:
     """Print the FluxGate version."""
     typer.echo(__version__)
+
+
+def overall_state(statuses: list[ProviderStatus]) -> str:
+    return (
+        "degraded"
+        if any(
+            status.state.value not in {"disabled", "running", "unsupported"} for status in statuses
+        )
+        else "healthy"
+    )
 
 
 def status_command() -> None:
@@ -21,11 +32,7 @@ def status_command() -> None:
         operating_system = detect_os()
         clients = application.clients.list()
         statuses = [provider.status() for provider in application.providers.all()]
-        overall = (
-            "degraded"
-            if any(status.state.value in {"stopped", "degraded"} for status in statuses)
-            else "healthy"
-        )
+        overall = overall_state(statuses)
         typer.echo("FluxGate\n")
         typer.echo(f"Version      {__version__}")
         typer.echo(f"Host         {application.config.server.domain or '(not configured)'}")

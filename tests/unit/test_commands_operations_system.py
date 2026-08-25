@@ -5,8 +5,10 @@ import pytest
 from fluxgate.core.commands import CommandRunner, redacted_args
 from fluxgate.core.errors import CommandError, FluxGateError, StateError
 from fluxgate.core.operations import OperationPlan
+from fluxgate.system import networking as networking_module
 from fluxgate.system.firewall import NftablesFirewallManager
 from fluxgate.system.forwarding import ForwardingManager
+from fluxgate.system.networking import LinuxNetworkInspector
 from fluxgate.system.os import detect_os
 from fluxgate.system.packages import AptPackageManager
 from fluxgate.system.services import SystemdServiceManager
@@ -70,6 +72,41 @@ def test_operation_dry_run_has_no_side_effects() -> None:
     plan.add("Would change a thing", action)
     assert plan.execute(dry_run=True) == ["Would change a thing"]
     assert not called
+
+
+def test_live_port_probes_use_the_requested_ip_family(monkeypatch) -> None:
+    observed: list[tuple[int, tuple[str, int]]] = []
+
+    class Probe:
+        def __init__(self, family: int, kind: int) -> None:
+            self.family = family
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def setsockopt(self, *args) -> None:
+            return None
+
+        def bind(self, endpoint: tuple[str, int]) -> None:
+            observed.append((self.family, endpoint))
+            if endpoint[0] == "::":
+                raise OSError("occupied IPv6 endpoint")
+
+    monkeypatch.setattr(networking_module.socket, "socket", Probe)
+    inspector = LinuxNetworkInspector(CommandRunner())
+    assert inspector.tcp_port_available(8443, "::") is False
+    assert inspector.tcp_port_available(8443, "0.0.0.0") is True  # noqa: S104
+    assert inspector.udp_port_available(8443, "::") is False
+    assert inspector.udp_port_available(8443, "0.0.0.0") is True  # noqa: S104
+    assert observed == [
+        (networking_module.socket.AF_INET6, ("::", 8443)),
+        (networking_module.socket.AF_INET, ("0.0.0.0", 8443)),  # noqa: S104
+        (networking_module.socket.AF_INET6, ("::", 8443)),
+        (networking_module.socket.AF_INET, ("0.0.0.0", 8443)),  # noqa: S104
+    ]
 
 
 class RecordingRunner:

@@ -27,6 +27,16 @@ def main() -> None:
         wheel_names = set(archive.namelist())
         assert_safe(wheel_names)
         assert "fluxgate/cli/app.py" in wheel_names
+        for required in (
+            "fluxgate/cli/manifest.py",
+            "fluxgate/core/manifest.py",
+            "fluxgate/profiles/catalog.py",
+            "fluxgate/profiles/service.py",
+            "fluxgate/providers/singbox/provider.py",
+            "fluxgate/providers/singbox/rendering.py",
+            "fluxgate/providers/singbox/tls.py",
+        ):
+            assert required in wheel_names, f"0.3 module missing from wheel: {required}"
         assert not any(name.startswith("tests/") for name in wheel_names)
         metadata_name = next(name for name in wheel_names if name.endswith(".dist-info/METADATA"))
         entry_name = next(
@@ -46,6 +56,7 @@ def main() -> None:
         assert any(name.endswith("/pyproject.toml") for name in sdist_names)
         assert any(name.endswith("/src/fluxgate/cli/app.py") for name in sdist_names)
         assert any(name.endswith("/tests/unit/test_openvpn.py") for name in sdist_names)
+        assert any(name.endswith("/tests/unit/test_profiles_singbox.py") for name in sdist_names)
 
     print(f"Validated {wheels[0].name} and {sdists[0].name}")
 

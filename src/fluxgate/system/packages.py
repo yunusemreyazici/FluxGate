@@ -9,6 +9,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 from fluxgate.core.commands import CommandRunner
 from fluxgate.core.errors import ProviderError
@@ -63,6 +64,9 @@ class AptPackageManager:
         try:
             # The URL is a constant official HTTPS origin assembled only from pinned constants.
             with urllib.request.urlopen(url, timeout=120) as response:
+                final_url = response.geturl()
+                if urlparse(final_url).scheme != "https":
+                    raise ProviderError("sing-box release download redirected away from HTTPS")
                 archive = response.read(100 * 1024 * 1024 + 1)
         except OSError as error:
             raise ProviderError(

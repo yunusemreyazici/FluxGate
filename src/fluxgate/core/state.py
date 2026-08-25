@@ -80,6 +80,8 @@ class StateStore:
     def _migrate_v1(raw: dict[object, object]) -> dict[object, object]:
         """Pure, lossless v0.2 -> v0.3 migration; persistence stays atomic on next save."""
         migrated = dict(raw)
+        if "profiles" in migrated:
+            raise StateError("schema-v1 state must not contain schema-v2 profiles")
         clients = migrated.get("clients", [])
         if not isinstance(clients, list):
             return migrated
@@ -89,6 +91,8 @@ class StateStore:
                 migrated_clients.append(item)
                 continue
             client = dict(item)
+            if "profile_credentials" in client:
+                raise StateError("schema-v1 clients must not contain schema-v2 profile credentials")
             client["profile_credentials"] = {}
             migrated_clients.append(client)
         migrated["clients"] = migrated_clients

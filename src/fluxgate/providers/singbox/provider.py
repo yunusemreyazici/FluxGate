@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from fluxgate.core.errors import ProviderError, StateError
+from fluxgate.core.errors import FluxGateError, ProviderError, StateError
 from fluxgate.core.models import (
     Client,
     ExportArtifact,
@@ -101,6 +101,8 @@ class SingBoxProvider(CoreProvider):
         if self.context.config.cores.singbox.binary_source == "managed" and (
             self.binary_marker.is_symlink()
             or not self.binary_marker.is_file()
+            or self.binary_marker.stat().st_nlink != 1
+            or stat.S_IMODE(self.binary_marker.stat().st_mode) != 0o600
             or self.binary_marker.read_bytes() != self.BINARY_OWNER
         ):
             raise ProviderError(f"refusing unmanaged binary at {self.binary}")
@@ -130,14 +132,30 @@ class SingBoxProvider(CoreProvider):
         return (
             self.marker.is_file()
             and not self.marker.is_symlink()
+            and self.marker.stat().st_nlink == 1
+            and stat.S_IMODE(self.marker.stat().st_mode) == 0o600
             and self.marker.read_bytes() == self.OWNER
         )
 
     def _assert_ownership(self) -> None:
-        if self.context.paths.singbox_dir.is_symlink():
-            raise ProviderError(
-                f"refusing symlinked sing-box config location: {self.context.paths.singbox_dir}"
-            )
+        checked_writable_anchor = False
+        for candidate in (
+            self.context.paths.singbox_dir,
+            *self.context.paths.singbox_dir.parents,
+        ):
+            if candidate.is_symlink():
+                raise ProviderError(f"refusing symlinked sing-box config path: {candidate}")
+            if candidate.exists() and not checked_writable_anchor:
+                checked_writable_anchor = True
+                if not candidate.is_dir():
+                    raise ProviderError(f"refusing non-directory sing-box config path: {candidate}")
+                metadata = candidate.stat()
+                if os.geteuid() == 0 and metadata.st_uid != 0:
+                    raise ProviderError(f"refusing non-root-owned sing-box path: {candidate}")
+                if stat.S_IMODE(metadata.st_mode) & 0o022:
+                    raise ProviderError(
+                        f"refusing group/world-writable sing-box config path: {candidate}"
+                    )
         if (
             self.context.paths.singbox_dir.exists()
             and any(self.context.paths.singbox_dir.iterdir())
@@ -159,7 +177,8 @@ class SingBoxProvider(CoreProvider):
             + "Wants=network-online.target\n\n[Service]\nType=simple\n"
             + f"ExecStartPre={self.binary} check -c {self.config_path}\n"
             + f"ExecStart={self.binary} run -c {self.config_path}\n"
-            + "Restart=on-failure\nRestartSec=2s\nNoNewPrivileges=true\nPrivateTmp=true\n"
+            + "Restart=on-failure\nRestartSec=2s\nUMask=0077\n"
+            + "NoNewPrivileges=true\nPrivateTmp=true\n"
             + "PrivateDevices=true\nProtectSystem=strict\nProtectHome=true\n"
             + "ProtectKernelTunables=true\nProtectKernelModules=true\n"
             + "ProtectControlGroups=true\nRestrictSUIDSGID=true\nLockPersonality=true\n"
@@ -218,26 +237,46 @@ class SingBoxProvider(CoreProvider):
         state = self.context.state.load()
         enabled = self._enabled_in_state(state)
         detection = self.detect()
-        active = (
-            enabled
-            and detection.available
-            and self.context.services.is_active(self.unit)
-            and self.context.services.is_enabled(self.unit)
-        )
-        healthy = (
-            active
-            and self._owned()
-            and self.config_path.is_file()
-            and self._listeners_healthy(state)
-        )
-        if healthy:
-            value = ProviderStateName.RUNNING
-        elif enabled and detection.available:
-            value = ProviderStateName.DEGRADED
-        elif enabled:
+        try:
+            active = self.context.services.is_active(self.unit)
+            service_enabled = self.context.services.is_enabled(self.unit)
+        except FluxGateError:
+            active = False
+            service_enabled = False
+        if not enabled:
+            value = (
+                ProviderStateName.DEGRADED
+                if active or service_enabled
+                else ProviderStateName.DISABLED
+            )
+        elif not detection.available:
             value = ProviderStateName.NOT_INSTALLED
         else:
-            value = ProviderStateName.DISABLED
+            identity = self.tls._load_current()
+            config_secure = (
+                self.config_path.is_file()
+                and not self.config_path.is_symlink()
+                and stat.S_IMODE(self.config_path.stat().st_mode) == 0o600
+            )
+            converged = False
+            if identity is not None and config_secure:
+                try:
+                    converged = self.config_path.read_bytes() == self._render(state, identity)
+                except ProviderError:
+                    converged = False
+            healthy = (
+                active
+                and service_enabled
+                and self._owned()
+                and self.unit_path.is_file()
+                and not self.unit_path.is_symlink()
+                and self.unit_path.read_bytes() == self._unit_content()
+                and identity is not None
+                and self.tls.valid(identity, self.context.config.server.domain)
+                and converged
+                and self._listeners_healthy(state)
+            )
+            value = ProviderStateName.RUNNING if healthy else ProviderStateName.DEGRADED
         return ProviderStatus(
             name=self.name,
             state=value,
@@ -272,9 +311,11 @@ class SingBoxProvider(CoreProvider):
             if not inspect_live:
                 continue
             available = (
-                self.context.network.tcp_port_available(profile.listen_port)
+                self.context.network.tcp_port_available(profile.listen_port, profile.listen_address)
                 if profile.socket_protocol == SocketProtocol.TCP
-                else self.context.network.udp_port_available(profile.listen_port)
+                else self.context.network.udp_port_available(
+                    profile.listen_port, profile.listen_address
+                )
             )
             if not available:
                 raise ProviderError(
@@ -505,6 +546,9 @@ class SingBoxProvider(CoreProvider):
         return ExportArtifact(
             name=f"{profile.name}.json", media_type="application/json", content=content
         )
+
+    def profile_export_artifact_name(self, profile: ProfileDefinition) -> str:
+        return f"{profile.name}.json"
 
     def healthcheck(self) -> list[HealthResult]:
         status = self.status()

@@ -6,12 +6,14 @@ import json
 import os
 import stat
 import tarfile
+from multiprocessing import get_context
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from fluxgate.clients import ClientService
+from fluxgate.core import state as state_module
 from fluxgate.core.commands import CommandRunner
 from fluxgate.core.errors import FluxGateError, ProviderError, StateError
 from fluxgate.core.manifest import render_manifest
@@ -91,6 +93,17 @@ class ProfileProvider(CoreProvider):
         return ExportArtifact(
             name=f"{profile.name}.json", media_type="application/json", content="{}\n"
         )
+
+    def profile_export_artifact_name(self, profile: ProfileDefinition) -> str:
+        return f"{profile.name}.json"
+
+
+def migrate_and_add_provider(state_path: str, provider_name: str) -> None:
+    store = StateStore(Path(state_path))
+    with store.lock():
+        state = store.load()
+        state.providers[provider_name] = {"enabled": True}
+        store.save(state)
 
 
 def profile(
@@ -288,6 +301,24 @@ def test_individual_profile_export_preserves_other_current_profile_artifacts(
     }
 
 
+def test_export_refuses_group_or_world_writable_parent(provider_context, tmp_path: Path) -> None:
+    provider = ProfileProvider(provider_context)
+    registry = ProviderRegistry([provider])
+    clients = ClientService(provider_context.state, registry)
+    item = profile()
+    client = Client(
+        name="alice",
+        profile_credentials={str(item.id): {"schema_version": 1, "uuid": str(item.id)}},
+    )
+    provider_context.state.save(FluxGateState(clients=[client], profiles=[item]))
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    with pytest.raises(FluxGateError, match="group/world-writable"):
+        clients.export("alice", unsafe)
+    assert list(unsafe.iterdir()) == []
+
+
 def test_server_and_client_render_all_protocols_without_insecure() -> None:
     profiles = [
         profile("vless", ProtocolName.VLESS, TransportName.TCP, 8443),
@@ -339,21 +370,51 @@ def test_v02_state_migration_preserves_credentials_and_fails_future(tmp_path: Pa
                         "name": "bob",
                         "created_at": "2026-01-01T00:00:00Z",
                         "enabled": True,
-                        "expires_at": None,
-                        "metadata": {},
+                        "expires_at": "2027-01-01T00:00:00Z",
+                        "metadata": {"owner": "operations"},
                         "provider_credentials": {
-                            "wireguard": {"private_key": "preserved"},
-                            "openvpn": {"serial": "01"},
+                            "wireguard": {
+                                "public_key": "real-looking-wireguard-public-key=",
+                                "address": "10.77.0.2/32",
+                            },
+                            "openvpn": {
+                                "common_name": "fg-12345678123456781234567812345678",
+                                "serial": "01AB",
+                                "address": "10.78.0.2",
+                            },
                         },
                     }
                 ],
-                "providers": {"wireguard": {"enabled": True}},
+                "providers": {
+                    "wireguard": {"enabled": True},
+                    "openvpn": {"enabled": True},
+                },
             }
         )
     )
     loaded = StateStore(path).load()
     assert loaded.schema_version == 2
-    assert loaded.clients[0].provider_credentials["wireguard"]["private_key"] == "preserved"
+    assert str(loaded.clients[0].id) == "12345678-1234-5678-1234-567812345678"
+    assert loaded.clients[0].name == "bob"
+    assert loaded.clients[0].created_at.isoformat() == "2026-01-01T00:00:00+00:00"
+    assert loaded.clients[0].expires_at is not None
+    assert loaded.clients[0].expires_at.isoformat() == "2027-01-01T00:00:00+00:00"
+    assert loaded.clients[0].metadata == {"owner": "operations"}
+    assert loaded.clients[0].provider_credentials == {
+        "wireguard": {
+            "public_key": "real-looking-wireguard-public-key=",
+            "address": "10.77.0.2/32",
+        },
+        "openvpn": {
+            "common_name": "fg-12345678123456781234567812345678",
+            "serial": "01AB",
+            "address": "10.78.0.2",
+        },
+    }
+    assert loaded.providers == {
+        "wireguard": {"enabled": True},
+        "openvpn": {"enabled": True},
+    }
     assert loaded.clients[0].profile_credentials == {}
     assert json.loads(path.read_text())["schema_version"] == 1
     path.write_text('{"schema_version": 99}')
@@ -362,6 +423,59 @@ def test_v02_state_migration_preserves_credentials_and_fails_future(tmp_path: Pa
     path.write_text('{"schema_version": true}')
     with pytest.raises(StateError, match="schema_version"):
         StateStore(path).load()
+    path.write_text('{"schema_version": 1, "clients": [], "providers": {}, "profiles": []}')
+    with pytest.raises(StateError, match="schema-v2 profiles"):
+        StateStore(path).load()
+    path.write_text(
+        '{"schema_version": 1, "clients": [{"name": "bob", '
+        '"profile_credentials": {}}], "providers": {}}'
+    )
+    with pytest.raises(StateError, match="schema-v2 profile credentials"):
+        StateStore(path).load()
+
+
+def test_v02_migration_atomic_failure_and_concurrent_retry_are_safe(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "state.json"
+    original = (
+        b'{"schema_version":1,"clients":[{"id":"12345678-1234-5678-1234-567812345678",'
+        b'"name":"bob","created_at":"2026-01-01T00:00:00Z","enabled":true,'
+        b'"expires_at":null,"metadata":{},"provider_credentials":{"wireguard":'
+        b'{"private_key":"byte-for-byte"},"openvpn":{"serial":"01"}}}],'
+        b'"providers":{"wireguard":{"enabled":true},"openvpn":{"enabled":true}}}\n'
+    )
+    path.write_bytes(original)
+    store = StateStore(path)
+    migrated = store.load()
+    real_replace = state_module.os.replace
+    monkeypatch.setattr(
+        state_module.os,
+        "replace",
+        lambda source, destination: (_ for _ in ()).throw(OSError("injected replace failure")),
+    )
+    with pytest.raises(StateError, match="cannot save state"):
+        store.save(migrated)
+    assert path.read_bytes() == original
+    monkeypatch.setattr(state_module.os, "replace", real_replace)
+
+    context = get_context("fork")
+    processes = [
+        context.Process(target=migrate_and_add_provider, args=(str(path), f"extra-{index}"))
+        for index in range(4)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+    final = store.load()
+    assert final.schema_version == 2
+    assert final.clients[0].provider_credentials == {
+        "wireguard": {"private_key": "byte-for-byte"},
+        "openvpn": {"serial": "01"},
+    }
+    assert {f"extra-{index}" for index in range(4)}.issubset(final.providers)
 
 
 def test_managed_tls_identity_has_san_private_modes_and_reuses_valid_identity(
@@ -373,10 +487,47 @@ def test_managed_tls_identity_has_san_private_modes_and_reuses_valid_identity(
     assert stat.S_IMODE(identity.private_key.stat().st_mode) == 0o600
     assert stat.S_IMODE(manager.ca_key.stat().st_mode) == 0o600
     assert manager.valid(identity, "vpn.example.com")
+    assert manager.valid(identity, "other.example.com") is False
+    assert manager.valid(identity, "vpn.example.com", renewal_days=398) is False
+    assert manager._ca_valid(renewal_days=4000) is False
     assert manager.ensure("vpn.example.com") == identity
+    certificate = provider_context.runner.run(
+        ["openssl", "x509", "-text", "-noout", "-in", str(identity.certificate)]
+    ).stdout
+    assert "TLS Web Server Authentication" in certificate
+    assert "CA:FALSE" in certificate
+    hard_link = identity.private_key.with_name("key-hard-link.pem")
+    os.link(identity.private_key, hard_link)
+    assert manager.valid(identity, "vpn.example.com") is False
+    hard_link.unlink()
+    assert manager.valid(identity, "vpn.example.com")
     manager.ca_key.chmod(0o644)
     assert manager.valid(identity, "vpn.example.com") is False
     with pytest.raises(ProviderError, match="CA private key is unsafe"):
+        manager.ensure("vpn.example.com")
+
+
+def test_managed_tls_detects_mismatched_server_and_ca_keys(provider_context) -> None:
+    provider_context.runner = CommandRunner()
+    manager = ManagedTLSIdentityManager(provider_context)
+    identity = manager.ensure("vpn.example.com")
+    replacement_server_key = provider_context.runner.run(
+        ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"]
+    ).stdout.encode()
+    identity.private_key.write_bytes(replacement_server_key)
+    identity.private_key.chmod(0o600)
+    assert manager.valid(identity, "vpn.example.com") is False
+    renewed = manager.ensure("vpn.example.com")
+    assert renewed != identity
+    assert manager.valid(renewed, "vpn.example.com")
+
+    replacement_ca_key = provider_context.runner.run(
+        ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"]
+    ).stdout.encode()
+    manager.ca_key.write_bytes(replacement_ca_key)
+    manager.ca_key.chmod(0o600)
+    assert manager.valid(renewed, "vpn.example.com") is False
+    with pytest.raises(ProviderError, match="CA identity is invalid"):
         manager.ensure("vpn.example.com")
 
 
@@ -393,6 +544,21 @@ def test_singbox_conflicts_model_tcp_and_udp_separately(provider_context) -> Non
     )
     with pytest.raises(ProviderError, match="VPN provider"):
         provider._check_profile_conflicts(FluxGateState(profiles=[udp]))
+
+
+def test_singbox_conflict_probe_uses_profile_listen_address(provider_context, monkeypatch) -> None:
+    provider = SingBoxProvider(provider_context)
+    observed: list[tuple[int, str]] = []
+
+    def available(port: int, address: str = "0.0.0.0") -> bool:  # noqa: S104
+        observed.append((port, address))
+        return True
+
+    monkeypatch.setattr(provider_context.network, "tcp_port_available", available)
+    ipv6 = profile(port=8443)
+    ipv6.listen_address = "::"
+    provider._check_profile_conflicts(FluxGateState(profiles=[ipv6]))
+    assert observed == [(8443, "::")]
 
 
 def prepared_provider(provider_context, monkeypatch) -> tuple[SingBoxProvider, TLSIdentity]:
@@ -431,6 +597,7 @@ def test_singbox_enable_repeat_drift_disable_and_shared_resource_independence(
     assert provider_context.services.is_enabled(provider.unit)
     assert provider.config_path.stat().st_mode & 0o777 == 0o600
     assert provider.unit_path.read_text().startswith(provider.UNIT_HEADER)
+    assert "UMask=0077" in provider.unit_path.read_text()
     assert provider_context.forwarding.consumers == set()
     assert provider_context.firewall.rules == {}
     assert provider.enable().changed is False
@@ -469,6 +636,19 @@ def test_singbox_refuses_foreign_config_and_unit(provider_context) -> None:
         provider.enable()
 
 
+def test_singbox_refuses_foreign_regular_file_at_managed_root(provider_context) -> None:
+    provider_context.paths.config_dir.mkdir(parents=True)
+    provider_context.paths.singbox_dir.write_text("foreign file")
+    provider = SingBoxProvider(provider_context)
+    with pytest.raises(ProviderError, match="non-directory sing-box config"):
+        provider.enable()
+    provider_context.paths.secrets_dir.write_text("foreign secrets file")
+    with pytest.raises(ProviderError, match="unsafe TLS identity"):
+        ManagedTLSIdentityManager(provider_context).ensure("vpn.example.com")
+    assert provider_context.paths.singbox_dir.read_text() == "foreign file"
+    assert provider_context.paths.secrets_dir.read_text() == "foreign secrets file"
+
+
 def test_singbox_refuses_symlinked_config_and_tls_roots(provider_context, tmp_path: Path) -> None:
     provider = SingBoxProvider(provider_context)
     foreign_config = tmp_path / "foreign-config"
@@ -483,8 +663,48 @@ def test_singbox_refuses_symlinked_config_and_tls_roots(provider_context, tmp_pa
     foreign_tls.mkdir()
     provider_context.paths.secrets_dir.mkdir(parents=True, exist_ok=True)
     provider_context.paths.singbox_tls_dir.symlink_to(foreign_tls, target_is_directory=True)
-    with pytest.raises(ProviderError, match="symlinked TLS identity"):
+    with pytest.raises(ProviderError, match="unsafe TLS identity"):
         ManagedTLSIdentityManager(provider_context).ensure("vpn.example.com")
+
+    provider_context.paths.singbox_tls_dir.unlink()
+    provider_context.paths.secrets_dir.rmdir()
+    provider_context.paths.config_dir.rmdir()
+    foreign_parent = tmp_path / "foreign-parent"
+    foreign_parent.mkdir()
+    provider_context.paths.config_dir.symlink_to(foreign_parent, target_is_directory=True)
+    with pytest.raises(ProviderError, match="unsafe TLS identity"):
+        ManagedTLSIdentityManager(provider_context).ensure("vpn.example.com")
+    assert list(foreign_parent.iterdir()) == []
+
+
+def test_singbox_refuses_world_writable_managed_root(provider_context) -> None:
+    provider_context.paths.config_dir.mkdir(mode=0o777)
+    provider_context.paths.config_dir.chmod(0o777)
+    with pytest.raises(ProviderError, match="unsafe TLS identity"):
+        ManagedTLSIdentityManager(provider_context).ensure("vpn.example.com")
+    assert not provider_context.paths.secrets_dir.exists()
+    with pytest.raises(ProviderError, match="group/world-writable sing-box config"):
+        SingBoxProvider(provider_context).enable()
+
+
+def test_singbox_status_fails_closed_on_drift_and_service_state_mismatch(
+    provider_context, monkeypatch
+) -> None:
+    provider, _ = prepared_provider(provider_context, monkeypatch)
+    provider.enable()
+    assert provider.status().state == ProviderStateName.RUNNING
+    document = json.loads(provider.config_path.read_bytes())
+    document["log"]["level"] = "debug"
+    provider.config_path.write_text(json.dumps(document))
+    provider.config_path.chmod(0o600)
+    assert provider.status().state == ProviderStateName.DEGRADED
+
+    provider.enable()
+    state = provider_context.state.load()
+    state.providers["singbox"]["enabled"] = False
+    provider_context.state.save(state)
+    assert provider_context.services.is_active(provider.unit)
+    assert provider.status().state == ProviderStateName.DEGRADED
 
 
 def test_singbox_validation_and_service_false_success_roll_back_owned_files(
@@ -632,6 +852,9 @@ def test_verified_release_acquisition_is_atomic_and_rejects_bad_checksum(
     archive = buffer.getvalue()
 
     class Response(io.BytesIO):
+        def geturl(self) -> str:
+            return "https://github.com/SagerNet/sing-box/releases/download/test/sing-box.tar.gz"
+
         def __enter__(self):
             return self
 
@@ -654,6 +877,19 @@ def test_verified_release_acquisition_is_atomic_and_rejects_bad_checksum(
     destination.unlink()
     monkeypatch.setitem(package_module.SING_BOX_ASSETS, "x86_64", ("amd64", "0" * 64))
     with pytest.raises(ProviderError, match="checksum"):
+        AptPackageManager(CommandRunner()).acquire_sing_box(destination)
+    assert not destination.exists()
+
+    class DowngradedResponse(Response):
+        def geturl(self) -> str:
+            return "http://downloads.example.invalid/sing-box.tar.gz"
+
+    monkeypatch.setattr(
+        package_module.urllib.request,
+        "urlopen",
+        lambda url, timeout: DowngradedResponse(archive),
+    )
+    with pytest.raises(ProviderError, match="redirected away from HTTPS"):
         AptPackageManager(CommandRunner()).acquire_sing_box(destination)
     assert not destination.exists()
 

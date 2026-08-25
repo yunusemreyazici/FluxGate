@@ -107,3 +107,8 @@ class CoreProvider(ABC):
         from fluxgate.core.errors import UnsupportedProviderError
 
         raise UnsupportedProviderError(f"{self.display_name} does not support profile exports")
+
+    def profile_export_artifact_name(self, profile: ProfileDefinition) -> str:
+        from fluxgate.core.errors import UnsupportedProviderError
+
+        raise UnsupportedProviderError(f"{self.display_name} does not support profile exports")
