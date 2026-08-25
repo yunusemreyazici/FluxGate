@@ -51,6 +51,13 @@ def test_operation_rolls_back_completed_steps_in_reverse() -> None:
     assert events == ["apply-one", "apply-two", "undo-two", "undo-one"]
 
 
+def test_operation_uses_future_tense_only_for_dry_run() -> None:
+    plan = OperationPlan()
+    plan.add("Would update: state", lambda: None)
+    assert plan.execute(dry_run=True) == ["Would update: state"]
+    assert plan.execute() == ["update: state"]
+
+
 def test_operation_dry_run_has_no_side_effects() -> None:
     called = False
 
@@ -284,3 +291,31 @@ def test_systemd_reports_failed_rollback() -> None:
     services = SystemdServiceManager(FailedSystemdRollbackRunner())  # type: ignore[arg-type]
     with pytest.raises(StateError, match="rollback failed: rollback disable failed"):
         services.enable_now("wg-quick@fg0.service")
+
+
+class FalseSuccessSystemdRunner:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+
+    def run(self, args, **kwargs):
+        from fluxgate.core.commands import CommandResult
+
+        command = tuple(args)
+        self.commands.append(command)
+        if command[:3] == ("systemctl", "is-enabled", "--quiet"):
+            enabled_checks = sum(
+                item[:3] == ("systemctl", "is-enabled", "--quiet") for item in self.commands
+            )
+            return CommandResult(command, 0 if enabled_checks > 1 else 1)
+        if command[:3] == ("systemctl", "is-active", "--quiet"):
+            return CommandResult(command, 1)
+        return CommandResult(command, 0)
+
+
+def test_systemd_success_exit_still_requires_active_postcondition() -> None:
+    runner = FalseSuccessSystemdRunner()
+    services = SystemdServiceManager(runner)  # type: ignore[arg-type]
+    with pytest.raises(StateError, match="did not become enabled and active"):
+        services.enable_now("wg-quick@fg0.service")
+    assert ("systemctl", "disable", "wg-quick@fg0.service") in runner.commands
+    assert ("systemctl", "stop", "wg-quick@fg0.service") in runner.commands

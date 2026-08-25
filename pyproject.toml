@@ -7,10 +7,14 @@ name = "fluxgate"
 version = "0.1.0"
 description = "Modular multi-transport connectivity server manager"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Yunus Emre YAZICI" }]
-dependencies = ["pydantic>=2.8,<3", "typer>=0.12,<1"]
+dependencies = [
+  "pydantic>=2.8,<3",
+  "tomli>=2.0,<3; python_version < '3.11'",
+  "typer>=0.12,<1",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -33,7 +37,7 @@ testpaths = ["tests"]
 markers = ["integration: tests requiring Linux or elevated privileges"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
@@ -41,8 +45,7 @@ select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
 ignore = ["S101"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.10"
 strict = true
 packages = ["fluxgate"]
 mypy_path = "src"
-

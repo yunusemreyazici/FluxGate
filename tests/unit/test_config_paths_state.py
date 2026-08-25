@@ -89,6 +89,20 @@ def test_invalid_state_lock_file_has_a_structured_error(tmp_path: Path) -> None:
         pytest.fail("invalid lock path must not be entered")
 
 
+def test_state_metadata_permission_error_is_structured(tmp_path: Path, monkeypatch) -> None:
+    store = StateStore(tmp_path / "state.json")
+    original = Path.is_symlink
+
+    def deny_state_metadata(path: Path) -> bool:
+        if path == store.path:
+            raise PermissionError("injected permission denial")
+        return original(path)
+
+    monkeypatch.setattr(Path, "is_symlink", deny_state_metadata)
+    with pytest.raises(StateError, match="cannot read state"):
+        store.load()
+
+
 def test_atomic_write_refuses_symlink_destination(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.write_text("unchanged")

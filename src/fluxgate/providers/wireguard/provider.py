@@ -87,7 +87,12 @@ class WireGuardProvider(CoreProvider):
     def status(self) -> ProviderStatus:
         detection = self.detect()
         enabled = self._enabled_in_state()
-        active = enabled and detection.available and self.context.services.is_active(self.unit)
+        active = (
+            enabled
+            and detection.available
+            and self.context.services.is_active(self.unit)
+            and self._interface_exists()
+        )
         if active:
             state = ProviderStateName.RUNNING
         elif enabled and detection.available:
@@ -184,6 +189,7 @@ class WireGuardProvider(CoreProvider):
             and detection.available
             and detection.binaries.get("nft", False)
             and active
+            and self._interface_exists()
             and self.context.services.is_enabled(self.unit)
             and self.private_key_path.exists()
             and self.public_key_path.exists()
@@ -228,11 +234,14 @@ class WireGuardProvider(CoreProvider):
                 "peers; restore state before reconciling to avoid peer loss"
             )
         detection = self.detect()
-        active = self.context.services.is_active(self.unit) if detection.available else False
+        service_active = (
+            self.context.services.is_active(self.unit) if detection.available else False
+        )
         service_enabled = (
             self.context.services.is_enabled(self.unit) if detection.available else False
         )
-        if self._interface_exists() and not active and not self._config_owned():
+        interface_present = self._interface_exists()
+        if interface_present and not service_active:
             raise ProviderError(
                 f"network interface {self.settings.interface} already exists and is not managed "
                 "by FluxGate"
@@ -241,7 +250,7 @@ class WireGuardProvider(CoreProvider):
             outbound = self.context.config.network.outbound_interface
             if outbound is not None and not self.context.network.interface_exists(outbound):
                 raise ProviderError(f"outbound network interface does not exist: {outbound}")
-            if not active and not self.context.network.udp_port_available(
+            if not service_active and not self.context.network.udp_port_available(
                 self.settings.listen_port
             ):
                 raise ProviderError(
@@ -250,12 +259,12 @@ class WireGuardProvider(CoreProvider):
             route_conflict = self.context.network.conflicting_route(
                 self._network(), self.settings.interface
             )
-            if route_conflict is not None and not active:
+            if route_conflict is not None and not service_active:
                 raise ProviderError(
                     f"WireGuard tunnel network {self._network()} overlaps existing route: "
                     f"{route_conflict}"
                 )
-        if self._is_converged(detection, active):
+        if self._is_converged(detection, service_active):
             return OperationResult(changed=False, message="WireGuard is already enabled")
         plan = OperationPlan()
         packages: list[str] = []
@@ -295,7 +304,7 @@ class WireGuardProvider(CoreProvider):
                 self.config_path.unlink(missing_ok=True)
             else:
                 atomic_write(self.config_path, old_config, 0o600)
-            if active:
+            if service_active:
                 self.context.services.restart(self.unit)
 
         if not config_current:
@@ -316,8 +325,8 @@ class WireGuardProvider(CoreProvider):
                 lambda: self.context.firewall.ensure_nat(network, outbound),
                 lambda: self.context.firewall.restore(firewall_checkpoint),
             )
-        service_was_active, service_was_enabled = active, service_enabled
-        if not active or not service_enabled:
+        service_was_active, service_was_enabled = service_active, service_enabled
+        if not service_active or not service_enabled:
             plan.add(
                 f"Would enable: {self.unit}",
                 lambda: self.context.services.enable_now(self.unit),
@@ -325,9 +334,9 @@ class WireGuardProvider(CoreProvider):
                     self.unit, enabled=service_was_enabled, active=service_was_active
                 ),
             )
-        if active and not config_current:
+        if service_active and (not interface_present or not config_current):
             plan.add(
-                f"Would restart: {self.unit} to apply configuration drift",
+                f"Would restart: {self.unit} to recover live state",
                 lambda: self.context.services.restart(self.unit),
             )
         if state_missing or not self._enabled_in_state():

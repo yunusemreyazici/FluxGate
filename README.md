@@ -14,8 +14,9 @@ FluxGate 0.1 is an early release. WireGuard is the reference implementation. Ope
 and Xray-core are registered, visible placeholders that refuse enable operations; they are not
 claimed as supported.
 
-Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.12 or
-newer is required. Host changes use apt, systemd, and nftables.
+Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
+newer is required, allowing FluxGate to use each supported distribution's native Python. Host
+changes use apt, systemd, and nftables.
 
 ## Architecture
 
@@ -42,10 +43,23 @@ modes; FluxGate's nftables rules live in their own identifiable table.
 
 ## Installation
 
-From a source checkout:
+From a source checkout, the supported system installation creates an isolated versioned virtual
+environment under `/opt/fluxgate`, installs the distribution's `python3-venv` package, and exposes
+`/usr/local/bin/fluxgate`:
 
 ```bash
-python3.12 -m venv .venv
+sudo ./scripts/install.sh
+fluxgate version
+```
+
+The installer supports Ubuntu 22.04/24.04 and Debian 12, refuses to overwrite a command it does not
+own, and preserves the previous versioned environment for rollback. It does not modify SSH or host
+firewall configuration.
+
+For an unprivileged development environment:
+
+```bash
+python3 -m venv .venv
 . .venv/bin/activate
 pip install .
 fluxgate version

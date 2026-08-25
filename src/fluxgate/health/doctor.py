@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 import shutil
 import socket
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field
 
+from fluxgate.core.compat import StrEnum
 from fluxgate.core.config import load_config
 from fluxgate.core.models import HealthLevel, StrictModel
 from fluxgate.core.paths import PathLayout

@@ -202,10 +202,25 @@ def test_enable_recovers_a_stopped_or_boot_disabled_service(provider_context, mo
     provider.enable()
     provider_context.services.active = False
     provider_context.services.enabled = False
+    provider_context.network.interfaces.discard("fg0")
     result = provider.enable()
     assert result.changed
     assert provider_context.services.active
     assert provider_context.services.enabled
+
+
+def test_enable_recovers_interface_missing_behind_active_oneshot(
+    provider_context, monkeypatch
+) -> None:
+    provider = WireGuardProvider(provider_context)
+    monkeypatch.setattr(provider, "detect", available)
+    provider.enable()
+    provider_context.network.interfaces.discard("fg0")
+    assert provider.status().state.value == "stopped"
+    result = provider.enable()
+    assert result.changed
+    assert "fg0" in provider_context.network.interfaces
+    assert f"restart:{provider.unit}" in provider_context.services.events
 
 
 def test_enable_refuses_existing_unmanaged_wireguard_configuration(
@@ -304,6 +319,20 @@ def test_enable_rejects_interface_route_and_port_conflicts(provider_context, mon
     provider_context.network.interfaces.add("fg0")
     with pytest.raises(FluxGateError, match="already exists"):
         provider.enable()
+
+
+def test_reenable_refuses_foreign_interface_even_with_preserved_managed_config(
+    provider_context, monkeypatch
+) -> None:
+    provider = WireGuardProvider(provider_context)
+    monkeypatch.setattr(provider, "detect", available)
+    provider.enable()
+    provider.disable()
+    provider_context.network.interfaces.add("fg0")
+    with pytest.raises(FluxGateError, match="already exists"):
+        provider.enable()
+    assert not provider_context.services.active
+    assert not provider_context.firewall.present
 
 
 def test_enable_rejects_overlapping_host_route(provider_context, monkeypatch) -> None:

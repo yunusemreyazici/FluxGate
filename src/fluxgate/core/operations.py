@@ -47,4 +47,4 @@ class OperationPlan:
             raise FluxGateError(
                 f"operation failed at step {len(completed) + 1}: {error}{suffix}"
             ) from error
-        return descriptions
+        return [description.removeprefix("Would ") for description in descriptions]

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from enum import StrEnum
+from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from fluxgate.core.compat import StrEnum
 
 
 class StrictModel(BaseModel):
@@ -82,7 +83,7 @@ class ClientArtifact(StrictModel):
 class Client(StrictModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     enabled: bool = True
     expires_at: datetime | None = None
     metadata: dict[str, str] = Field(default_factory=dict)

@@ -54,6 +54,8 @@ class SystemdServiceManager:
         enabled, active = self.is_enabled(unit), self.is_active(unit)
         try:
             self.runner.run(["systemctl", "enable", "--now", unit], mutate=True)
+            if not self.is_enabled(unit) or not self.is_active(unit):
+                raise StateError(f"{unit} did not become enabled and active")
         except BaseException as error:
             try:
                 self.restore(unit, enabled=enabled, active=active)
@@ -81,3 +83,5 @@ class SystemdServiceManager:
 
     def restart(self, unit: str) -> None:
         self.runner.run(["systemctl", "restart", unit], mutate=True)
+        if not self.is_active(unit):
+            raise StateError(f"{unit} did not become active after restart")

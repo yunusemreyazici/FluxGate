@@ -51,13 +51,17 @@ class StateStore:
         self.path = path
 
     def load(self) -> FluxGateState:
-        if self.path.is_symlink():
-            raise StateError(f"refusing to read state through symlink: {self.path}")
-        if not self.path.exists():
-            return FluxGateState()
         try:
+            if self.path.is_symlink():
+                raise StateError(f"refusing to read state through symlink: {self.path}")
+            if not self.path.exists():
+                return FluxGateState()
             return FluxGateState.model_validate_json(self.path.read_bytes())
-        except (OSError, ValidationError) as error:
+        except StateError:
+            raise
+        except OSError as error:
+            raise StateError(f"cannot read state at {self.path}: {error}") from error
+        except ValidationError as error:
             raise StateError(f"invalid state at {self.path}: {error}") from error
 
     def save(self, state: FluxGateState) -> None:

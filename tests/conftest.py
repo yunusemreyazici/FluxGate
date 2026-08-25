@@ -37,7 +37,8 @@ class FakePackages:
 
 
 class FakeServices:
-    def __init__(self) -> None:
+    def __init__(self, network) -> None:
+        self.network = network
         self.active = False
         self.enabled = False
         self.events: list[str] = []
@@ -52,11 +53,13 @@ class FakeServices:
         self.events.append(f"enable:{unit}")
         self.active = True
         self.enabled = True
+        self.network.interfaces.add("fg0")
 
     def disable_now(self, unit: str) -> None:
         self.events.append(f"disable:{unit}")
         self.active = False
         self.enabled = False
+        self.network.interfaces.discard("fg0")
 
     def reload(self, unit: str) -> None:
         self.events.append(f"reload:{unit}")
@@ -64,11 +67,16 @@ class FakeServices:
     def restart(self, unit: str) -> None:
         self.events.append(f"restart:{unit}")
         self.active = True
+        self.network.interfaces.add("fg0")
 
     def restore(self, unit: str, *, enabled: bool, active: bool) -> None:
         self.events.append(f"restore:{unit}:{enabled}:{active}")
         self.enabled = enabled
         self.active = active
+        if active:
+            self.network.interfaces.add("fg0")
+        else:
+            self.network.interfaces.discard("fg0")
 
 
 class FakeFirewall:
@@ -155,14 +163,15 @@ def provider_context(tmp_path: Path) -> OperationContext:
     config = AppConfig.model_validate(
         {"server": {"domain": "vpn.example.com"}, "network": {"outbound_interface": "eth0"}}
     )
+    network = FakeNetwork()
     return OperationContext(
         config=config,
         paths=paths,
         state=StateStore(paths.state_file),
         runner=FakeRunner(),  # type: ignore[arg-type]
         packages=FakePackages(),
-        services=FakeServices(),
+        services=FakeServices(network),
         firewall=FakeFirewall(),
         forwarding=FakeForwarding(),  # type: ignore[arg-type]
-        network=FakeNetwork(),
+        network=network,
     )
