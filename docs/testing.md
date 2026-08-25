@@ -127,3 +127,39 @@ The protected bundle was copied to macOS and verified with its separately pinned
 Disposable changes to the manifest, bootstrap descriptor, a sing-box artifact, the WireGuard
 artifact, and bundled trust were each rejected. This test created no tunnel, route, DNS change, or
 network probe; all Mac and VPS temporary bundles were deleted afterward.
+
+## v0.5 development validation
+
+Local AWG tests cover typed parameter bounds and deferred-field rejection, deterministic preset
+resolution, matching server/client wire parameters, independent credentials and addresses,
+first/idempotent enable, disable/re-enable, owned service/config/binary paths, foreign-resource
+refusal, dry-run zero side effects, rollback, state-save interruption recovery, selective revoke,
+closed signed bootstrap inventory, secret-free manifest metadata, shared forwarding/NAT ownership,
+and pinned supply-chain archive/build behavior.
+
+Set `AMNEZIAWG_TEST_BINARY` to the official v3.1.20260812 `awg-quick` executable to enable the
+portable real-parser test. Server UAPI parsing and runtime convergence require Linux plus an active
+`amneziawg-go` userspace interface and belong in the privileged test layer. Record both the tools
+tag and the daemon tag because the selected daemon tag retains an older embedded `--version`
+constant; the immutable build provenance marker is authoritative for the exact source revision.
+
+Privileged v0.5 validation passed on Ubuntu 24.04.4 x86_64 with kernel 7.0.0-1011-aws. The host used
+the pinned AmneziaWG tools v3.1.20260812 and userspace source v3.1.20260814, with the exact managed
+source provenance retained because that daemon tag reports an older embedded version constant.
+Validation covered fresh and idempotent enable, official config parsing, `fgawg0` on
+`10.79.0.1/24`, UDP 51821, independent client provisioning, a real userspace peer handshake and
+RX/TX counters, tunnel addressing, gateway reachability, DNS, VPS-public-IPv4 egress, shared
+forwarding/NAT, simultaneous WireGuard/OpenVPN/sing-box operation, selective revoke, service
+restart recovery, reboot persistence, and ownership-safe cleanup. Bob and every pre-existing
+provider remained intact.
+
+The real client ran in an isolated Linux network namespace on the authorized disposable VPS. No
+compatible official macOS AWG 3.1 client was safely automatable, so macOS end-to-end data-path
+validation was not executed and no Mac interface, route, or DNS setting was changed. The complete
+privileged AmneziaWG lifecycle has not yet been exercised on Ubuntu 22.04, Debian 12, or arm64;
+do not claim those provider/platform combinations from the Ubuntu 24.04 x86_64 evidence.
+
+If a compatible official macOS AWG 3.1 client cannot be automated safely, perform only protected
+config import/parser validation and report that real E2E was not executed. Before any real tunnel,
+record route/DNS state and create teardown first. A full-tunnel revoke test must never revoke the
+active control path before its local teardown can execute.

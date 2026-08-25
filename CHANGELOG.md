@@ -5,6 +5,29 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+### AmneziaWG 3.1 Foundation
+
+- Added a first-class AmneziaWG `CoreProvider` using the pinned official userspace backend, an
+  owned supervised systemd lifecycle, independent WireGuard-family keys/credentials, and
+  provider-scoped client provisioning, export, and selective revoke.
+- Added schema-versioned immutable resilience profiles with deterministic `standard`, `balanced`,
+  and `enhanced` creation presets backed by a reviewed typed AWG 3.1 parameter subset.
+- Integrated AmneziaWG with shared forwarding and nftables NAT leases, doctor/status, signed
+  bootstrap artifact inventory, secret-free capability manifests, and generic offline Pathfinder
+  compatibility requirements.
+- Added pinned supply-chain acquisition/build controls, real-parser test hooks, ownership and
+  failure rollback tests, state-interruption reconciliation, and cross-provider isolation coverage.
+- Fixed official-parser validation failures caused by interface-length-unsafe temporary names,
+  userspace startup races by waiting for the managed UAPI socket without a shell loop, and service
+  restart interference with foreign AmneziaWG interfaces by not claiming the upstream shared
+  runtime directory.
+- Preserved the executable bit, while stripping broader archive permissions, when safely extracting
+  the pinned Go toolchain used for the userspace build.
+- Made selective revoke converge safely after an interrupted state save without retaining client
+  artifacts or a live peer.
+
+The project version remains 0.4.0 while v0.5 is in development.
+
 ## [0.4.0] - 2026-08-26
 
 ### Secure Client Bootstrap

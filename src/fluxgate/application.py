@@ -14,6 +14,7 @@ from fluxgate.core.state import StateStore
 from fluxgate.identity import ServerIdentityManager
 from fluxgate.manifest import SignedManifestService
 from fluxgate.profiles import ProfileService
+from fluxgate.providers.amneziawg import AmneziaWGProvider
 from fluxgate.providers.base import OperationContext
 from fluxgate.providers.openvpn import OpenVPNProvider
 from fluxgate.providers.singbox import SingBoxProvider
@@ -60,6 +61,7 @@ def build_application(*, dry_run: bool = False) -> Application:
     providers = ProviderRegistry(
         [
             WireGuardProvider(context),
+            AmneziaWGProvider(context),
             OpenVPNProvider(context),
             SingBoxProvider(context),
             XrayProvider(context),

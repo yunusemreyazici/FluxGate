@@ -96,6 +96,69 @@ class WireGuardConfig(StrictModel):
         return value
 
 
+class AmneziaWGResilienceConfig(StrictModel):
+    name: str = "awg-standard"
+    preset: Literal["standard", "balanced", "enhanced"] = "standard"
+
+    @field_validator("name")
+    @classmethod
+    def safe_name(cls, value: str) -> str:
+        if (
+            not (1 <= len(value) <= 64)
+            or not value[0].isalnum()
+            or any(not (character.isalnum() or character in {"-", "_", "."}) for character in value)
+            or value in {".", ".."}
+        ):
+            raise ValueError(
+                "resilience profile name may contain letters, digits, '.', '_' and '-'"
+            )
+        return value
+
+
+class AmneziaWGConfig(StrictModel):
+    enabled: bool = False
+    interface: str = "fgawg0"
+    listen_port: int = Field(default=51821, ge=1, le=65535)
+    address: str = "10.79.0.1/24"
+    client_dns: list[str] = Field(default_factory=lambda: ["1.1.1.1", "1.0.0.1"])
+    backend: Literal["userspace", "kernel"] = "userspace"
+    resilience: AmneziaWGResilienceConfig = Field(default_factory=AmneziaWGResilienceConfig)
+
+    @field_validator("interface")
+    @classmethod
+    def interface_name(cls, value: str) -> str:
+        if not value or len(value) > 15 or any(not (c.isalnum() or c in "_.-") for c in value):
+            raise ValueError("invalid AmneziaWG interface name")
+        return value
+
+    @field_validator("address")
+    @classmethod
+    def tunnel_address(cls, value: str) -> str:
+        try:
+            interface = ipaddress.ip_interface(value)
+        except ValueError as error:
+            raise ValueError("invalid AmneziaWG tunnel address") from error
+        if interface.version != 4 or interface.ip in {
+            interface.network.network_address,
+            interface.network.broadcast_address,
+        }:
+            raise ValueError("AmneziaWG address must be a usable IPv4 interface address")
+        return value
+
+    @field_validator("client_dns")
+    @classmethod
+    def dns_addresses(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one AmneziaWG client DNS address is required")
+        try:
+            for address in value:
+                if ipaddress.ip_address(address).version != 4:
+                    raise ValueError("IPv6 DNS is not supported by the IPv4-only AmneziaWG pool")
+        except ValueError as error:
+            raise ValueError("AmneziaWG client DNS entries must be IPv4 addresses") from error
+        return value
+
+
 class OpenVPNConfig(StrictModel):
     enabled: bool = False
     interface: str = "fgovpn0"
@@ -155,6 +218,7 @@ class SingBoxConfig(StrictModel):
 
 class CoresConfig(StrictModel):
     wireguard: WireGuardConfig = Field(default_factory=WireGuardConfig)
+    amneziawg: AmneziaWGConfig = Field(default_factory=AmneziaWGConfig)
     openvpn: OpenVPNConfig = Field(default_factory=OpenVPNConfig)
     singbox: SingBoxConfig = Field(default_factory=SingBoxConfig)
     xray: ToggleConfig = Field(default_factory=ToggleConfig)
@@ -169,18 +233,40 @@ class AppConfig(StrictModel):
     @model_validator(mode="after")
     def distinct_provider_networks(self) -> AppConfig:
         wireguard = ipaddress.ip_interface(self.cores.wireguard.address).network
+        amneziawg = ipaddress.ip_interface(self.cores.amneziawg.address).network
         openvpn = ipaddress.ip_network(self.cores.openvpn.network)
-        if wireguard.overlaps(openvpn):
-            raise ValueError("WireGuard and OpenVPN tunnel networks must not overlap")
-        if self.cores.wireguard.interface == self.cores.openvpn.interface:
-            raise ValueError("WireGuard and OpenVPN interface names must differ")
-        if self.cores.wireguard.listen_port == self.cores.openvpn.listen_port:
-            raise ValueError("WireGuard and OpenVPN UDP listen ports must differ")
+        networks = {
+            "WireGuard": wireguard,
+            "AmneziaWG": amneziawg,
+            "OpenVPN": openvpn,
+        }
+        for left, right in (
+            ("WireGuard", "AmneziaWG"),
+            ("WireGuard", "OpenVPN"),
+            ("AmneziaWG", "OpenVPN"),
+        ):
+            if networks[left].overlaps(networks[right]):
+                raise ValueError(f"{left} and {right} tunnel networks must not overlap")
+        interfaces = {
+            "WireGuard": self.cores.wireguard.interface,
+            "AmneziaWG": self.cores.amneziawg.interface,
+            "OpenVPN": self.cores.openvpn.interface,
+        }
+        if len(set(interfaces.values())) != len(interfaces):
+            raise ValueError("WireGuard, AmneziaWG and OpenVPN interface names must differ")
+        ports = {
+            "WireGuard": self.cores.wireguard.listen_port,
+            "AmneziaWG": self.cores.amneziawg.listen_port,
+            "OpenVPN": self.cores.openvpn.listen_port,
+        }
+        if len(set(ports.values())) != len(ports):
+            raise ValueError("WireGuard, AmneziaWG and OpenVPN UDP listen ports must differ")
         return self
 
     def as_toml(self) -> str:
         """Render the small public configuration surface without secret values."""
         wg = self.cores.wireguard
+        awg = self.cores.amneziawg
         openvpn = self.cores.openvpn
         outbound = (
             f'outbound_interface = "{self.network.outbound_interface}"\n'
@@ -188,6 +274,7 @@ class AppConfig(StrictModel):
             else ""
         )
         dns = ", ".join(f'"{item}"' for item in wg.client_dns)
+        awg_dns = ", ".join(f'"{item}"' for item in awg.client_dns)
         openvpn_dns = ", ".join(f'"{item}"' for item in openvpn.client_dns)
         return (
             "schema_version = 1\n\n"
@@ -203,6 +290,16 @@ class AppConfig(StrictModel):
             f"listen_port = {wg.listen_port}\n"
             f'address = "{wg.address}"\n'
             f"client_dns = [{dns}]\n\n"
+            "[cores.amneziawg]\n"
+            f"enabled = {str(awg.enabled).lower()}\n"
+            f'interface = "{awg.interface}"\n'
+            f"listen_port = {awg.listen_port}\n"
+            f'address = "{awg.address}"\n'
+            f"client_dns = [{awg_dns}]\n"
+            f'backend = "{awg.backend}"\n\n'
+            "[cores.amneziawg.resilience]\n"
+            f'name = "{awg.resilience.name}"\n'
+            f'preset = "{awg.resilience.preset}"\n\n'
             "[cores.openvpn]\n"
             f"enabled = {str(openvpn.enabled).lower()}\n"
             f'interface = "{openvpn.interface}"\n'

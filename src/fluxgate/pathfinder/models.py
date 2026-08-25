@@ -13,12 +13,14 @@ from fluxgate.core.models import StrictModel
 
 class PathfinderProvider(StrEnum):
     WIREGUARD = "wireguard"
+    AMNEZIAWG = "amneziawg"
     OPENVPN = "openvpn"
     SINGBOX = "singbox"
 
 
 class PathfinderProtocol(StrEnum):
     WIREGUARD = "wireguard"
+    AMNEZIAWG = "amneziawg"
     OPENVPN = "openvpn"
     VLESS = "vless"
     TROJAN = "trojan"
@@ -48,6 +50,7 @@ class IPFamily(StrEnum):
 
 class FeatureCapability(StrEnum):
     UDP = "udp"
+    AMNEZIAWG_3_1 = "amneziawg_3_1"
     QUIC = "quic"
     MANAGED_CA = "managed_ca"
 

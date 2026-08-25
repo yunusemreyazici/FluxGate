@@ -77,3 +77,34 @@ Automatic key rotation, remote enrollment, remote manifest delivery, and an anti
 are not implemented. A lost signing key requires operator recovery; a future rotation protocol
 must authenticate a new key with the old trusted key. `generated_at` supports future freshness
 policy but is not an anti-replay guarantee.
+
+## v0.5 AmneziaWG security model (development)
+
+AmneziaWG server and client keypairs are independent from WireGuard keys, the OpenVPN PKI,
+sing-box TLS identities, and the FluxGate signing identity. Private keys and complete client
+exports are mode-`0600` protected artifacts. Status, doctor, Pathfinder output, public manifests,
+logs, command arguments, and exceptions must not expose them.
+
+The v0.5 profile surface intentionally supports only `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, and fixed
+unique `H1`-`H4` values. They are coordinated wire-format configuration and are not cryptographic
+secrets, but publishing the complete fingerprint is unnecessary. The signed public manifest
+therefore carries only the stable profile UUID and the AWG 3.1 capability requirement; concrete
+values remain in protected server/client configuration. Profile parameters are immutable after
+creation. Header protection, content padding, `S3`/`S4`, custom signatures, timing controls,
+random trailers, and cookie controls are deferred pending further upstream interoperability and
+security review. Header-protection key material, if supported in the future, will be treated as a
+secret and will never enter public metadata.
+
+Managed AmneziaWG tools are pinned to the official v3.1.20260812 release artifact and verified
+against GitHub's published SHA-256 digest. The userspace backend is built from the immutable
+official v3.1.20260814 commit using a checksum-verified Go 1.25.0 toolchain, read-only Go module
+metadata, the Go checksum database, bounded HTTPS downloads, path-safe archives, and isolated build
+caches. Upstream does not publish an independent source-archive checksum for that userspace tag;
+the immutable commit URL and HTTPS origin are the documented trust boundary. FluxGate refuses
+partial or foreign managed binary trees, configurations, units, and interfaces.
+
+The AmneziaWG kernel backend is not automatically selected and is deferred due to current upstream
+kernel/toolchain and AWG 3.1 netlink compatibility issues. FluxGate does not patch upstream kernel
+networking code, replace foreign modules, install DKMS automatically, or reboot the host. AmneziaWG
+changes traffic characteristics and may help on some networks; FluxGate makes no claim that it is
+invisible, undetectable, or guaranteed to bypass network controls.

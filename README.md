@@ -19,6 +19,10 @@ FluxGate v0.4.0 is the latest stable early-stage release.
 
 **Supported cores/providers:** WireGuard, OpenVPN UDP, and sing-box.
 
+**v0.5 development:** a first-class AmneziaWG 3.1 provider and immutable resilience-profile
+foundation are under development. The supported production design uses the official userspace
+backend; this work is not part of the stable v0.4.0 release.
+
 **Supported sing-box profiles:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
 Hysteria2/QUIC/TLS.
 
@@ -55,6 +59,7 @@ their complete privileged lifecycle has not yet been exercised.
 ```text
 FluxGate Server
 ├── WireGuard
+├── AmneziaWG 3.1 (v0.5 development)
 ├── OpenVPN
 ├── sing-box
 │   ├── VLESS / TCP / TLS
@@ -72,6 +77,7 @@ CLI (presentation only)
        ├── typed TOML configuration + atomic JSON state
        ├── provider registry + capability declarations
        │    ├── WireGuard (implemented)
+       │    ├── AmneziaWG userspace (v0.5 development)
        │    ├── OpenVPN UDP (implemented)
        │    ├── sing-box core (implemented)
        │    │    └── typed VLESS, Trojan, and Hysteria2 profiles
@@ -91,7 +97,33 @@ provider. Providers own provider-specific system behavior. The CLI and client se
 registry and capabilities instead of switching on protocol names. Operation plans support dry runs and
 best-effort reverse-order rollback. State and secrets use atomic replacement and restrictive file
 modes. FluxGate providers hold independent forwarding leases and tagged rules inside one owned
-nftables table, so WireGuard and OpenVPN can coexist safely.
+nftables table, so WireGuard, OpenVPN, and AmneziaWG can coexist safely.
+
+## FluxGate v0.5 development: AmneziaWG 3.1
+
+AmneziaWG is a separate `CoreProvider`, not a WireGuard mode flag. It reuses only compatible
+WireGuard-family primitives such as key format and IPv4 address allocation while retaining
+independent server/client keys, interface, port, subnet, configuration, service, state, and
+provider credentials.
+
+v0.5 targets the reviewed stable AmneziaWG 3.1 generation: `amneziawg-tools`
+v3.1.20260812 and `amneziawg-go` v3.1.20260814. The supervised userspace backend is the selected
+production path. The kernel backend is explicitly deferred because current upstream build and
+netlink compatibility issues have not been resolved across the supported host matrix.
+
+One active resilience profile belongs to the one v0.5 AmneziaWG interface. `standard`, `balanced`,
+and `enhanced` are deterministic creation presets only; authoritative schema-versioned state stores
+the stable profile UUID and concrete validated parameters. Wire parameters are immutable after
+creation because changing them without coordinated client reissue would strand existing exports.
+The public signed manifest exposes only the profile identity and AWG 3.1 capability requirement;
+concrete parameters remain in protected client configuration. These parameters modify traffic
+characteristics and are not a replacement for WireGuard cryptography or a guarantee of network
+reachability.
+
+The v0.5 provider has completed privileged lifecycle and isolated real-client validation on Ubuntu
+24.04.4 x86_64, including coexistence, DNS and IPv4 egress, selective revoke, service restart, and
+reboot recovery. Ubuntu 22.04, Debian 12, arm64, and macOS AWG 3.1 client data paths remain
+unvalidated for this provider; the stable release remains v0.4.0 while v0.5 is in development.
 
 ## FluxGate v0.4: signed bootstrap and Pathfinder foundation
 
@@ -219,6 +251,18 @@ listen_port = 51820
 address = "10.77.0.1/24"
 client_dns = ["1.1.1.1", "1.0.0.1"]
 
+[cores.amneziawg]
+enabled = false
+interface = "fgawg0"
+listen_port = 51821
+address = "10.79.0.1/24"
+client_dns = ["1.1.1.1", "1.0.0.1"]
+backend = "userspace"
+
+[cores.amneziawg.resilience]
+name = "awg-standard"
+preset = "standard"
+
 [cores.openvpn]
 enabled = false
 interface = "fgovpn0"
@@ -254,15 +298,18 @@ fluxgate doctor --json
 fluxgate core list
 fluxgate core enable wireguard --dry-run
 fluxgate core enable openvpn --dry-run
+fluxgate core enable amneziawg --dry-run
 sudo fluxgate core enable wireguard
 sudo fluxgate core enable openvpn
 sudo fluxgate core enable singbox
+sudo fluxgate core enable amneziawg
 sudo fluxgate profile create primary-vless --provider singbox --protocol vless \
   --transport tcp --security tls --port 8443
 sudo fluxgate profile enable primary-vless
 sudo fluxgate client add alice
 sudo fluxgate client enable alice wireguard
 sudo fluxgate client enable alice openvpn
+sudo fluxgate client enable alice amneziawg
 sudo fluxgate client enable alice --profile primary-vless
 sudo fluxgate client export alice --output ./exports
 sudo fluxgate client export alice --profile primary-vless --output ./exports
@@ -319,7 +366,7 @@ path.
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
 - **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
-- **0.5:** AmneziaWG and resilience profiles
+- **0.5:** AmneziaWG 3.1 and resilience profiles (development)
 - **Later:** active Pathfinder probing/scoring/failover, remote enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,
   CDN/fronting, censorship detection, GUI/mobile clients, optional 3x-ui integration, and

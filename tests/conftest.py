@@ -24,6 +24,17 @@ class FakeRunner:
             return CommandResult(command, 0, f"private-{self.key_number}\n")
         if command == ("wg", "pubkey"):
             return CommandResult(command, 0, f"public-{self.key_number}\n")
+        if command[-1:] == ("genkey",) and "awg" in command[0]:
+            self.key_number += 1
+            return CommandResult(command, 0, f"private-{self.key_number}\n")
+        if command[-1:] == ("pubkey",) and "awg" in command[0]:
+            return CommandResult(command, 0, f"public-{self.key_number}\n")
+        if command[-1:] == ("--version",) and command[0].endswith("/awg"):
+            return CommandResult(command, 0, "amneziawg-tools v3.1.20260812\n")
+        if command[-1:] == ("--version",) and command[0].endswith("/amneziawg-go"):
+            return CommandResult(command, 0, "amneziawg-go 0.0.20250522\n")
+        if len(command) >= 2 and command[1] == "strip":
+            return CommandResult(command, 0, "[Interface]\n")
         if len(command) == 2 and command[1] == "version" and "sing-box" in command[0]:
             return CommandResult(command, 0, "sing-box version 1.13.19\n")
         return CommandResult(command, 0)
@@ -41,6 +52,13 @@ class FakePackages:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"fake sing-box")
         destination.chmod(0o755)
+        return True
+
+    def acquire_amneziawg(self, awg: Path, awg_quick: Path, userspace: Path) -> bool:
+        for destination in (awg, awg_quick, userspace):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"fake AmneziaWG executable")
+            destination.chmod(0o755)
         return True
 
 
@@ -71,7 +89,11 @@ class FakeServices:
             self.enabled_units.discard("wg-quick@fg0.service")
 
     def _interface(self, unit: str) -> str:
-        return "fgovpn0" if unit == "openvpn-server@fluxgate.service" else "fg0"
+        if unit == "openvpn-server@fluxgate.service":
+            return "fgovpn0"
+        if unit == "fluxgate-amneziawg.service":
+            return "fgawg0"
+        return "fg0"
 
     def _set_active(self, unit: str, active: bool) -> None:
         interface = self._interface(unit)
@@ -80,11 +102,15 @@ class FakeServices:
             self.network.interfaces.add(interface)
             if unit == "openvpn-server@fluxgate.service":
                 self.network.listening_ports.add(1194)
+            if unit == "fluxgate-amneziawg.service":
+                self.network.listening_ports.add(51821)
         else:
             self.active_units.discard(unit)
             self.network.interfaces.discard(interface)
             if unit == "openvpn-server@fluxgate.service":
                 self.network.listening_ports.discard(1194)
+            if unit == "fluxgate-amneziawg.service":
+                self.network.listening_ports.discard(51821)
 
     def is_active(self, unit: str) -> bool:
         return unit in self.active_units

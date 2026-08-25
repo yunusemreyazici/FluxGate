@@ -303,6 +303,7 @@ class SingBoxProvider(CoreProvider):
             seen.add(endpoint)
             if profile.socket_protocol == SocketProtocol.UDP and profile.listen_port in {
                 self.context.config.cores.wireguard.listen_port,
+                self.context.config.cores.amneziawg.listen_port,
                 self.context.config.cores.openvpn.listen_port,
             }:
                 raise ProviderError(

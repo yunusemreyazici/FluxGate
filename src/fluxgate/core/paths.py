@@ -98,6 +98,18 @@ class PathLayout:
         return self.config_dir / "sing-box"
 
     @property
+    def amneziawg_dir(self) -> Path:
+        return self.config_dir / "amneziawg"
+
+    @property
+    def amneziawg_config_file(self) -> Path:
+        return self.amneziawg_dir / "server.conf"
+
+    @property
+    def amneziawg_runtime_config_file(self) -> Path:
+        return self.amneziawg_dir / "server.runtime.conf"
+
+    @property
     def singbox_config_file(self) -> Path:
         return self.singbox_dir / "config.json"
 
@@ -116,6 +128,30 @@ class PathLayout:
     @property
     def singbox_unit_file(self) -> Path:
         return self.systemd_dir / "fluxgate-singbox.service"
+
+    @property
+    def amneziawg_unit_file(self) -> Path:
+        return self.systemd_dir / "fluxgate-amneziawg.service"
+
+    @property
+    def amneziawg_binary_dir(self) -> Path:
+        return self.local_lib_dir / "amneziawg-3.1"
+
+    @property
+    def awg_binary(self) -> Path:
+        return self.amneziawg_binary_dir / "awg"
+
+    @property
+    def awg_quick_binary(self) -> Path:
+        return self.amneziawg_binary_dir / "awg-quick"
+
+    @property
+    def amneziawg_go_binary(self) -> Path:
+        return self.amneziawg_binary_dir / "amneziawg-go"
+
+    @property
+    def amneziawg_wait_helper(self) -> Path:
+        return self.amneziawg_binary_dir / "wait-uapi.py"
 
     @property
     def singbox_binary(self) -> Path:

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from fluxgate.core.config import AppConfig
 from fluxgate.core.errors import StateError
@@ -24,6 +24,7 @@ from fluxgate.pathfinder.models import (
     PathfinderTransport,
 )
 from fluxgate.profiles import protocol_spec
+from fluxgate.providers.amneziawg.models import AmneziaWGProviderState
 
 
 class ManifestServer(StrictModel):
@@ -79,10 +80,12 @@ def build_manifest(
         return value
 
     wireguard_enabled = provider_enabled("wireguard", config.cores.wireguard.enabled)
+    amneziawg_enabled = provider_enabled("amneziawg", config.cores.amneziawg.enabled)
     openvpn_enabled = provider_enabled("openvpn", config.cores.openvpn.enabled)
     singbox_enabled = provider_enabled("singbox", config.cores.singbox.enabled)
     if not endpoint and (
         wireguard_enabled
+        or amneziawg_enabled
         or openvpn_enabled
         or (singbox_enabled and any(profile.enabled for profile in state.profiles))
     ):
@@ -104,6 +107,32 @@ def build_manifest(
                 socket_protocol="udp",
                 ip_families=(IPFamily.IPV4,),
                 required_features=(FeatureCapability.UDP,),
+            )
+        )
+    if amneziawg_enabled:
+        try:
+            awg_state = AmneziaWGProviderState.model_validate_json(
+                json.dumps(state.providers["amneziawg"])
+            )
+        except (KeyError, ValidationError) as error:
+            raise StateError("enabled AmneziaWG provider has invalid profile state") from error
+        candidates.append(
+            ConnectionCandidate(
+                candidate_id="provider:amneziawg",
+                provider=PathfinderProvider.AMNEZIAWG,
+                profile_id=awg_state.profile.id,
+                protocol=PathfinderProtocol.AMNEZIAWG,
+                transport=PathfinderTransport.UDP,
+                security=PathfinderSecurity.WIREGUARD,
+                connection_mode=ConnectionMode.SYSTEM_TUNNEL,
+                endpoint=endpoint,
+                port=config.cores.amneziawg.listen_port,
+                socket_protocol="udp",
+                ip_families=(IPFamily.IPV4,),
+                required_features=(
+                    FeatureCapability.UDP,
+                    FeatureCapability.AMNEZIAWG_3_1,
+                ),
             )
         )
     if openvpn_enabled:
