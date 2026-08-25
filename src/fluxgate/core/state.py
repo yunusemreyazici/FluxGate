@@ -51,10 +51,10 @@ class StateStore:
         self.path = path
 
     def load(self) -> FluxGateState:
-        if not self.path.exists():
-            return FluxGateState()
         if self.path.is_symlink():
             raise StateError(f"refusing to read state through symlink: {self.path}")
+        if not self.path.exists():
+            return FluxGateState()
         try:
             return FluxGateState.model_validate_json(self.path.read_bytes())
         except (OSError, ValidationError) as error:
@@ -67,7 +67,16 @@ class StateStore:
             ).encode()
             + b"\n"
         )
-        atomic_write(self.path, payload)
+        try:
+            atomic_write(self.path, payload)
+        except StateError:
+            raise
+        except OSError as error:
+            raise StateError(f"cannot save state at {self.path}: {error}") from error
+
+    @property
+    def exists(self) -> bool:
+        return self.path.exists() and not self.path.is_symlink()
 
     @contextmanager
     def lock(self) -> Iterator[None]:
@@ -79,10 +88,16 @@ class StateStore:
         lock_path = self.path.with_suffix(f"{self.path.suffix}.lock")
         if lock_path.is_symlink():
             raise StateError(f"refusing to use symlink lock file: {lock_path}")
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        descriptor: int | None = None
         try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
             os.fchmod(descriptor, 0o600)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError as error:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise StateError(f"cannot acquire state lock at {lock_path}: {error}") from error
+        try:
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)

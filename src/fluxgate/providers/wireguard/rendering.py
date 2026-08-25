@@ -91,6 +91,6 @@ def render_client(
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
         f"Endpoint = {domain}:{settings.listen_port}\n"
-        "AllowedIPs = 0.0.0.0/0\n"
+        "AllowedIPs = 0.0.0.0/0, ::/0\n"
         "PersistentKeepalive = 25\n"
     )

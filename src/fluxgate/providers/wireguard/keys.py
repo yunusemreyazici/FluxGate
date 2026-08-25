@@ -48,7 +48,11 @@ class WireGuardKeys:
             raise ProviderError("WireGuard public key exists but the private key is missing")
         private, public = self.keypair()
         atomic_write(self.private_path, f"{private}\n".encode(), 0o600)
-        atomic_write(self.public_path, f"{public}\n".encode(), 0o644)
+        try:
+            atomic_write(self.public_path, f"{public}\n".encode(), 0o644)
+        except BaseException:
+            self.private_path.unlink(missing_ok=True)
+            raise
         return True
 
     def _read(self, path: Path, label: str) -> str:
@@ -56,6 +60,10 @@ class WireGuardKeys:
             raise ProviderError(f"WireGuard server {label} key is missing")
         if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode):
             raise ProviderError(f"WireGuard server {label} key is not a safe regular file")
+        if label == "private" and stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise ProviderError(
+                f"WireGuard server private key has unsafe permissions: {path}; expected 0600"
+            )
         value = path.read_text().strip()
         if not value or len(value) > 128 or any(character.isspace() for character in value):
             raise ProviderError(f"WireGuard server {label} key has invalid content")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from fluxgate.core.errors import FluxGateError
@@ -20,7 +21,11 @@ class ClientService:
 
     def find(self, identity: str) -> Client:
         state = self.state.load()
-        for client in state.clients:
+        return self._find(state.clients, identity)
+
+    @staticmethod
+    def _find(clients: Sequence[Client], identity: str) -> Client:
+        for client in clients:
             if client.name == identity or str(client.id) == identity:
                 return client
         raise FluxGateError(f"client not found: {identity}")
@@ -41,33 +46,46 @@ class ClientService:
                         artifact = provider.add_client(client)
                         client.provider_credentials[provider.name] = artifact.credentials
                         configured.append(provider)
-            except BaseException:
+                state.clients.append(client)
+                self.state.save(state)
+            except BaseException as error:
+                rollback_failures: list[str] = []
                 for provider in reversed(configured):
-                    provider.revoke_client(client)
+                    try:
+                        provider.revoke_client(client)
+                    except BaseException as rollback_error:
+                        rollback_failures.append(f"{provider.name}: {rollback_error}")
+                if rollback_failures:
+                    raise FluxGateError(
+                        f"client creation failed: {error}; rollback failures: "
+                        f"{'; '.join(rollback_failures)}"
+                    ) from error
                 raise
-            state.clients.append(client)
-            self.state.save(state)
             return client
 
     def revoke(self, identity: str) -> Client:
-        state = self.state.load()
-        client = self.find(identity)
-        for provider in self.providers.all():
-            if provider.name in client.provider_credentials:
-                provider.revoke_client(client)
-        for index, stored in enumerate(state.clients):
-            if stored.id == client.id:
-                stored.enabled = False
-                stored.provider_credentials = {}
-                state.clients[index] = stored
-        self.state.save(state)
-        return client
+        with self.state.lock():
+            state = self.state.load()
+            client = self._find(state.clients, identity)
+            for provider in self.providers.all():
+                if provider.name in client.provider_credentials:
+                    provider.revoke_client(client)
+            for index, stored in enumerate(state.clients):
+                if stored.id == client.id:
+                    stored.enabled = False
+                    stored.provider_credentials = {}
+                    state.clients[index] = stored
+            self.state.save(state)
+            return client
 
     def delete(self, identity: str) -> UUID:
-        client = self.find(identity)
-        if client.enabled or client.provider_credentials:
-            self.revoke(identity)
-        state = self.state.load()
-        state.clients = [stored for stored in state.clients if stored.id != client.id]
-        self.state.save(state)
-        return client.id
+        with self.state.lock():
+            state = self.state.load()
+            client = self._find(state.clients, identity)
+            if client.enabled or client.provider_credentials:
+                for provider in self.providers.all():
+                    if provider.name in client.provider_credentials:
+                        provider.revoke_client(client)
+            state.clients = [stored for stored in state.clients if stored.id != client.id]
+            self.state.save(state)
+            return client.id

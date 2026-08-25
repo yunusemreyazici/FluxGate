@@ -5,16 +5,23 @@ from __future__ import annotations
 from typing import Protocol
 
 from fluxgate.core.commands import CommandRunner
+from fluxgate.core.errors import StateError
 
 
 class ServiceManager(Protocol):
     def is_active(self, unit: str) -> bool: ...
+
+    def is_enabled(self, unit: str) -> bool: ...
 
     def enable_now(self, unit: str) -> None: ...
 
     def disable_now(self, unit: str) -> None: ...
 
     def reload(self, unit: str) -> None: ...
+
+    def restart(self, unit: str) -> None: ...
+
+    def restore(self, unit: str, *, enabled: bool, active: bool) -> None: ...
 
 
 class SystemdServiceManager:
@@ -27,11 +34,50 @@ class SystemdServiceManager:
             == 0
         )
 
+    def is_enabled(self, unit: str) -> bool:
+        return (
+            self.runner.run(["systemctl", "is-enabled", "--quiet", unit], check=False).returncode
+            == 0
+        )
+
+    def restore(self, unit: str, *, enabled: bool, active: bool) -> None:
+        self.runner.run(
+            ["systemctl", "enable" if enabled else "disable", unit],
+            mutate=True,
+        )
+        self.runner.run(
+            ["systemctl", "start" if active else "stop", unit],
+            mutate=True,
+        )
+
     def enable_now(self, unit: str) -> None:
-        self.runner.run(["systemctl", "enable", "--now", unit], mutate=True)
+        enabled, active = self.is_enabled(unit), self.is_active(unit)
+        try:
+            self.runner.run(["systemctl", "enable", "--now", unit], mutate=True)
+        except BaseException as error:
+            try:
+                self.restore(unit, enabled=enabled, active=active)
+            except BaseException as rollback_error:
+                raise StateError(
+                    f"failed to enable {unit}: {error}; rollback failed: {rollback_error}"
+                ) from error
+            raise
 
     def disable_now(self, unit: str) -> None:
-        self.runner.run(["systemctl", "disable", "--now", unit], mutate=True)
+        enabled, active = self.is_enabled(unit), self.is_active(unit)
+        try:
+            self.runner.run(["systemctl", "disable", "--now", unit], mutate=True)
+        except BaseException as error:
+            try:
+                self.restore(unit, enabled=enabled, active=active)
+            except BaseException as rollback_error:
+                raise StateError(
+                    f"failed to disable {unit}: {error}; rollback failed: {rollback_error}"
+                ) from error
+            raise
 
     def reload(self, unit: str) -> None:
         self.runner.run(["systemctl", "reload-or-restart", unit], mutate=True)
+
+    def restart(self, unit: str) -> None:
+        self.runner.run(["systemctl", "restart", unit], mutate=True)

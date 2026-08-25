@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class StrictModel(BaseModel):
     """Base model rejecting misspelled or unknown input fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class ProviderStateName(StrEnum):
@@ -103,6 +103,6 @@ class Client(StrictModel):
 
 
 class FluxGateState(StrictModel):
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     clients: list[Client] = Field(default_factory=list)
     providers: dict[str, dict[str, Any]] = Field(default_factory=dict)

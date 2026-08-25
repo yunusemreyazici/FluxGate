@@ -18,7 +18,10 @@ class AptPackageManager:
     def install(self, packages: list[str]) -> bool:
         if not packages:
             return False
+        self.runner.run(["apt-get", "update"], mutate=True, timeout=300.0)
         self.runner.run(
-            ["apt-get", "install", "-y", "--no-install-recommends", *packages], mutate=True
+            ["apt-get", "install", "-y", "--no-install-recommends", *packages],
+            mutate=True,
+            timeout=300.0,
         )
         return True

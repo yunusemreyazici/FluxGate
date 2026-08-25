@@ -38,6 +38,7 @@ def require_supported_host(*, dry_run: bool = False) -> None:
 
 def safe_client(client: Client) -> dict[str, Any]:
     return {
+        "schema_version": 1,
         "id": str(client.id),
         "name": client.name,
         "created_at": client.created_at.isoformat(),

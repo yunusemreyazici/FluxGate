@@ -22,6 +22,7 @@ from fluxgate.core.paths import PathLayout
 from fluxgate.core.state import StateStore
 from fluxgate.system.firewall import FirewallManager
 from fluxgate.system.forwarding import ForwardingManager
+from fluxgate.system.networking import NetworkInspector
 from fluxgate.system.packages import PackageManager
 from fluxgate.system.services import ServiceManager
 
@@ -36,6 +37,7 @@ class OperationContext:
     services: ServiceManager
     firewall: FirewallManager
     forwarding: ForwardingManager
+    network: NetworkInspector
     dry_run: bool = False
 
 

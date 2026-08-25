@@ -7,7 +7,7 @@ from ipaddress import IPv4Network
 from pathlib import Path
 
 from fluxgate.core.config import WireGuardConfig
-from fluxgate.core.errors import ProviderError
+from fluxgate.core.errors import ProviderError, StateError
 from fluxgate.core.models import (
     Client,
     ClientArtifact,
@@ -43,6 +43,7 @@ class WireGuardProvider(CoreProvider):
             ProviderCapability.RELOAD,
         }
     )
+    CONFIG_HEADER = b"# Managed by FluxGate;"
 
     @property
     def settings(self) -> WireGuardConfig:
@@ -74,11 +75,14 @@ class WireGuardProvider(CoreProvider):
         )
 
     def _enabled_in_state(self) -> bool:
-        return bool(
+        value = (
             self.context.state.load()
             .providers.get(self.name, {})
             .get("enabled", self.settings.enabled)
         )
+        if not isinstance(value, bool):
+            raise StateError("invalid WireGuard provider state: enabled must be a boolean")
+        return value
 
     def status(self) -> ProviderStatus:
         detection = self.detect()
@@ -138,12 +142,49 @@ class WireGuardProvider(CoreProvider):
         state.providers[self.name] = provider_state
         self.context.state.save(state)
 
+    def _config_owned(self) -> bool:
+        if self.config_path.is_symlink():
+            raise ProviderError(
+                f"refusing to use WireGuard configuration symlink: {self.config_path}"
+            )
+        return self.config_path.exists() and self.config_path.read_bytes().startswith(
+            self.CONFIG_HEADER
+        )
+
+    def _assert_config_ownership(self) -> None:
+        if self.config_path.is_symlink():
+            raise ProviderError(
+                f"refusing to use WireGuard configuration symlink: {self.config_path}"
+            )
+        if self.config_path.exists() and not self._config_owned():
+            raise ProviderError(
+                f"refusing to replace unmanaged WireGuard configuration: {self.config_path}"
+            )
+
+    def _require_owned_config(self) -> None:
+        if not self._config_owned():
+            raise ProviderError(f"managed WireGuard configuration is missing: {self.config_path}")
+
+    def _interface_exists(self) -> bool:
+        if self.context.dry_run:
+            return False
+        return self.context.network.interface_exists(self.settings.interface)
+
+    def _reload_peers(self) -> None:
+        stripped = self.context.runner.run(["wg-quick", "strip", str(self.config_path)]).stdout
+        self.context.runner.run(
+            ["wg", "syncconf", self.settings.interface, "/dev/stdin"],
+            input_text=stripped,
+            mutate=True,
+        )
+
     def _is_converged(self, detection: ProviderDetection, active: bool) -> bool:
         if not (
             self._enabled_in_state()
             and detection.available
             and detection.binaries.get("nft", False)
             and active
+            and self.context.services.is_enabled(self.unit)
             and self.private_key_path.exists()
             and self.public_key_path.exists()
             and self.config_path.exists()
@@ -171,8 +212,49 @@ class WireGuardProvider(CoreProvider):
             return False
 
     def enable(self) -> OperationResult:
+        if self.context.dry_run:
+            return self._enable_locked()
+        with self.context.state.lock():
+            return self._enable_locked()
+
+    def _enable_locked(self) -> OperationResult:
+        self._assert_config_ownership()
+        if not self.context.config.network.ipv4:
+            raise ProviderError("WireGuard 0.1 requires network.ipv4 to be enabled")
+        state_missing = not self.context.state.exists
+        if state_missing and self._config_owned() and b"[Peer]" in self.config_path.read_bytes():
+            raise ProviderError(
+                "FluxGate state is missing while the managed WireGuard configuration contains "
+                "peers; restore state before reconciling to avoid peer loss"
+            )
         detection = self.detect()
         active = self.context.services.is_active(self.unit) if detection.available else False
+        service_enabled = (
+            self.context.services.is_enabled(self.unit) if detection.available else False
+        )
+        if self._interface_exists() and not active and not self._config_owned():
+            raise ProviderError(
+                f"network interface {self.settings.interface} already exists and is not managed "
+                "by FluxGate"
+            )
+        if not self.context.dry_run:
+            outbound = self.context.config.network.outbound_interface
+            if outbound is not None and not self.context.network.interface_exists(outbound):
+                raise ProviderError(f"outbound network interface does not exist: {outbound}")
+            if not active and not self.context.network.udp_port_available(
+                self.settings.listen_port
+            ):
+                raise ProviderError(
+                    f"UDP listen port is already in use: {self.settings.listen_port}"
+                )
+            route_conflict = self.context.network.conflicting_route(
+                self._network(), self.settings.interface
+            )
+            if route_conflict is not None and not active:
+                raise ProviderError(
+                    f"WireGuard tunnel network {self._network()} overlaps existing route: "
+                    f"{route_conflict}"
+                )
         if self._is_converged(detection, active):
             return OperationResult(changed=False, message="WireGuard is already enabled")
         plan = OperationPlan()
@@ -189,6 +271,7 @@ class WireGuardProvider(CoreProvider):
         private_existed = self.private_key_path.exists()
         public_existed = self.public_key_path.exists()
         keys_exist = private_existed and public_existed
+        config_current = keys_exist and self.configuration_valid()
         if not keys_exist:
 
             def remove_new_keys() -> None:
@@ -202,10 +285,6 @@ class WireGuardProvider(CoreProvider):
                 lambda: self._ensure_server_keys(),
                 remove_new_keys,
             )
-        if self.config_path.is_symlink():
-            raise ProviderError(
-                f"refusing to replace WireGuard configuration symlink: {self.config_path}"
-            )
         old_config = self.config_path.read_bytes() if self.config_path.exists() else None
 
         def write_config() -> None:
@@ -216,29 +295,42 @@ class WireGuardProvider(CoreProvider):
                 self.config_path.unlink(missing_ok=True)
             else:
                 atomic_write(self.config_path, old_config, 0o600)
+            if active:
+                self.context.services.restart(self.unit)
 
-        plan.add(f"Would converge: {self.config_path}", write_config, restore_config)
+        if not config_current:
+            plan.add(f"Would converge: {self.config_path}", write_config, restore_config)
+        forwarding_checkpoint = self.context.forwarding.checkpoint()
         if not self.context.forwarding.enabled() or not self.context.forwarding.configured():
             plan.add(
                 "Would enable: IPv4 forwarding",
                 lambda: self.context.forwarding.ensure(),
-                lambda: self.context.forwarding.remove(),
+                lambda: self.context.forwarding.restore(forwarding_checkpoint),
             )
         network = str(self._network())
         outbound = self.context.config.network.outbound_interface
+        firewall_checkpoint = self.context.firewall.checkpoint()
         if not self.context.firewall.configured(network, outbound):
             plan.add(
                 "Would configure: persistent FluxGate nftables NAT rules",
                 lambda: self.context.firewall.ensure_nat(network, outbound),
-                lambda: self.context.firewall.remove(),
+                lambda: self.context.firewall.restore(firewall_checkpoint),
             )
-        if not active:
+        service_was_active, service_was_enabled = active, service_enabled
+        if not active or not service_enabled:
             plan.add(
                 f"Would enable: {self.unit}",
                 lambda: self.context.services.enable_now(self.unit),
-                lambda: self.context.services.disable_now(self.unit),
+                lambda: self.context.services.restore(
+                    self.unit, enabled=service_was_enabled, active=service_was_active
+                ),
             )
-        if not self._enabled_in_state():
+        if active and not config_current:
+            plan.add(
+                f"Would restart: {self.unit} to apply configuration drift",
+                lambda: self.context.services.restart(self.unit),
+            )
+        if state_missing or not self._enabled_in_state():
             plan.add("Would update: FluxGate provider state", lambda: self._set_enabled_state(True))
         actions = plan.execute(dry_run=self.context.dry_run)
         return OperationResult(
@@ -248,17 +340,48 @@ class WireGuardProvider(CoreProvider):
         )
 
     def disable(self) -> OperationResult:
-        if not self._enabled_in_state():
+        if self.context.dry_run:
+            return self._disable_locked()
+        with self.context.state.lock():
+            return self._disable_locked()
+
+    def _disable_locked(self) -> OperationResult:
+        self._assert_config_ownership()
+        service_active = self.context.services.is_active(self.unit)
+        service_enabled = self.context.services.is_enabled(self.unit)
+        firewall_managed = self.context.firewall.managed()
+        forwarding_managed = self.context.forwarding.configured()
+        if not (
+            self._enabled_in_state()
+            or service_active
+            or service_enabled
+            or firewall_managed
+            or forwarding_managed
+        ):
             return OperationResult(changed=False, message="WireGuard is already disabled")
         plan = OperationPlan()
-        plan.add(
-            f"Would disable: {self.unit}", lambda: self.context.services.disable_now(self.unit)
-        )
-        plan.add("Would remove: FluxGate nftables table", lambda: self.context.firewall.remove())
-        plan.add(
-            "Would remove: FluxGate forwarding persistence",
-            lambda: self.context.forwarding.remove(),
-        )
+        if service_active or service_enabled:
+            plan.add(
+                f"Would disable: {self.unit}",
+                lambda: self.context.services.disable_now(self.unit),
+                lambda: self.context.services.restore(
+                    self.unit, enabled=service_enabled, active=service_active
+                ),
+            )
+        if firewall_managed:
+            firewall_checkpoint = self.context.firewall.checkpoint()
+            plan.add(
+                "Would remove: FluxGate nftables table",
+                lambda: self.context.firewall.remove(),
+                lambda: self.context.firewall.restore(firewall_checkpoint),
+            )
+        if forwarding_managed:
+            forwarding_checkpoint = self.context.forwarding.checkpoint()
+            plan.add(
+                "Would remove: FluxGate forwarding persistence",
+                lambda: self.context.forwarding.remove(),
+                lambda: self.context.forwarding.restore(forwarding_checkpoint),
+            )
         plan.add("Would update: FluxGate provider state", lambda: self._set_enabled_state(False))
         actions = plan.execute(dry_run=self.context.dry_run)
         return OperationResult(
@@ -287,14 +410,13 @@ class WireGuardProvider(CoreProvider):
             raise ProviderError("WireGuard must be enabled before adding a peer")
         if self.name in client.provider_credentials:
             raise ProviderError(f"client {client.name} already has WireGuard credentials")
+        self._require_owned_config()
         private, public = self._keypair()
         address = self._allocate_address()
         client.provider_credentials[self.name] = {"public_key": public, "address": address}
         export = self._export_content(client, private)
         private_path = self._client_private_path(client)
         export_path = self._client_config_path(client)
-        if self.config_path.is_symlink():
-            raise ProviderError("WireGuard configuration is a symlink")
         old_server = self.config_path.read_bytes() if self.config_path.exists() else None
         plan = OperationPlan()
         plan.add(
@@ -313,7 +435,7 @@ class WireGuardProvider(CoreProvider):
                 self.config_path.unlink(missing_ok=True)
             else:
                 atomic_write(self.config_path, old_server, 0o600)
-                self.context.services.reload(self.unit)
+                self._reload_peers()
 
         plan.add(
             f"Add WireGuard peer {client.name}",
@@ -322,7 +444,7 @@ class WireGuardProvider(CoreProvider):
             ),
             restore_server,
         )
-        plan.add(f"Reload {self.unit}", lambda: self.context.services.reload(self.unit))
+        plan.add(f"Reload {self.unit}", self._reload_peers)
         plan.execute(dry_run=self.context.dry_run)
         return ClientArtifact(
             provider=self.name,
@@ -337,8 +459,7 @@ class WireGuardProvider(CoreProvider):
     def revoke_client(self, client: Client) -> OperationResult:
         if self.name not in client.provider_credentials:
             return OperationResult(changed=False, message="client has no WireGuard peer")
-        if self.config_path.is_symlink():
-            raise ProviderError("WireGuard configuration is a symlink")
+        self._require_owned_config()
         old_config = self.config_path.read_bytes()
         try:
             atomic_write(
@@ -346,10 +467,10 @@ class WireGuardProvider(CoreProvider):
                 self._server_config(self._provider_clients(exclude=client)),
                 0o600,
             )
-            self.context.services.reload(self.unit)
+            self._reload_peers()
         except BaseException:
             atomic_write(self.config_path, old_config, 0o600)
-            self.context.services.reload(self.unit)
+            self._reload_peers()
             raise
         self._client_private_path(client).unlink(missing_ok=True)
         self._client_config_path(client).unlink(missing_ok=True)

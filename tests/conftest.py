@@ -17,6 +17,8 @@ class FakeRunner:
     def run(self, args, **kwargs):
         command = tuple(args)
         self.commands.append(command)
+        if command[:4] == ("ip", "link", "show", "dev"):
+            return CommandResult(command, 0 if command[-1] == "eth0" else 1)
         if command == ("wg", "genkey"):
             self.key_number += 1
             return CommandResult(command, 0, f"private-{self.key_number}\n")
@@ -37,21 +39,36 @@ class FakePackages:
 class FakeServices:
     def __init__(self) -> None:
         self.active = False
+        self.enabled = False
         self.events: list[str] = []
 
     def is_active(self, unit: str) -> bool:
         return self.active
 
+    def is_enabled(self, unit: str) -> bool:
+        return self.enabled
+
     def enable_now(self, unit: str) -> None:
         self.events.append(f"enable:{unit}")
         self.active = True
+        self.enabled = True
 
     def disable_now(self, unit: str) -> None:
         self.events.append(f"disable:{unit}")
         self.active = False
+        self.enabled = False
 
     def reload(self, unit: str) -> None:
         self.events.append(f"reload:{unit}")
+
+    def restart(self, unit: str) -> None:
+        self.events.append(f"restart:{unit}")
+        self.active = True
+
+    def restore(self, unit: str, *, enabled: bool, active: bool) -> None:
+        self.events.append(f"restore:{unit}:{enabled}:{active}")
+        self.enabled = enabled
+        self.active = active
 
 
 class FakeFirewall:
@@ -64,6 +81,15 @@ class FakeFirewall:
         return changed
 
     def configured(self, source_cidr: str, outbound_interface: str | None) -> bool:
+        return self.present
+
+    def checkpoint(self) -> object:
+        return self.present
+
+    def restore(self, checkpoint: object) -> None:
+        self.present = bool(checkpoint)
+
+    def managed(self) -> bool:
         return self.present
 
     def remove(self) -> bool:
@@ -87,10 +113,32 @@ class FakeForwarding:
         self.present = True
         return changed
 
+    def checkpoint(self):
+        return self.present
+
+    def restore(self, checkpoint) -> None:
+        self.present = bool(checkpoint)
+
     def remove(self) -> bool:
         changed = self.present
         self.present = False
         return changed
+
+
+class FakeNetwork:
+    def __init__(self) -> None:
+        self.interfaces = {"eth0"}
+        self.route_conflict: str | None = None
+        self.occupied_ports: set[int] = set()
+
+    def interface_exists(self, interface: str) -> bool:
+        return interface in self.interfaces
+
+    def conflicting_route(self, network, interface: str) -> str | None:
+        return self.route_conflict
+
+    def udp_port_available(self, port: int) -> bool:
+        return port not in self.occupied_ports
 
 
 @pytest.fixture
@@ -116,4 +164,5 @@ def provider_context(tmp_path: Path) -> OperationContext:
         services=FakeServices(),
         firewall=FakeFirewall(),
         forwarding=FakeForwarding(),  # type: ignore[arg-type]
+        network=FakeNetwork(),
     )

@@ -59,6 +59,8 @@ root. Commands that mutate the default host paths do.
 The default configuration is `/etc/fluxgate/config.toml`:
 
 ```toml
+schema_version = 1
+
 [server]
 domain = "vpn.example.com"
 
@@ -84,7 +86,8 @@ enabled = false
 enabled = false
 ```
 
-Unknown fields are rejected. `FLUXGATE_CONFIG_DIR`, `FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
+Unknown fields and unsupported schema versions are rejected. `FLUXGATE_CONFIG_DIR`,
+`FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
 `FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_SYSCTL_DIR`, `FLUXGATE_NFTABLES_DIR`, and
 `FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. Values must be
 absolute, traversal-free, and contain no whitespace or control characters.

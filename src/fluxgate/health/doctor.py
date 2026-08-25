@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field
 
@@ -33,6 +34,7 @@ class HealthCheck(StrictModel):
 
 
 class HealthReport(StrictModel):
+    schema_version: Literal[1] = 1
     checks: list[HealthCheck] = Field(default_factory=list)
 
     @property

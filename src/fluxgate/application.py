@@ -17,6 +17,7 @@ from fluxgate.providers.wireguard import WireGuardProvider
 from fluxgate.providers.xray import XrayProvider
 from fluxgate.system.firewall import NftablesFirewallManager
 from fluxgate.system.forwarding import ForwardingManager
+from fluxgate.system.networking import LinuxNetworkInspector
 from fluxgate.system.packages import AptPackageManager
 from fluxgate.system.services import SystemdServiceManager
 
@@ -45,6 +46,7 @@ def build_application(*, dry_run: bool = False) -> Application:
         services=SystemdServiceManager(runner),
         firewall=NftablesFirewallManager(runner, paths.firewall_file, paths.firewall_unit_file),
         forwarding=ForwardingManager(paths.forwarding_file, runner),
+        network=LinuxNetworkInspector(runner),
         dry_run=dry_run,
     )
     providers = ProviderRegistry(

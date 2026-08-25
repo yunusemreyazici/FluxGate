@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, ValidationError, field_validator
 
@@ -83,9 +84,10 @@ class WireGuardConfig(StrictModel):
             raise ValueError("at least one client DNS address is required")
         try:
             for address in value:
-                ipaddress.ip_address(address)
+                if ipaddress.ip_address(address).version != 4:
+                    raise ValueError("IPv6 DNS is not supported by the IPv4-only WireGuard pool")
         except ValueError as error:
-            raise ValueError("client DNS entries must be IP addresses") from error
+            raise ValueError("client DNS entries must be IPv4 addresses") from error
         return value
 
 
@@ -101,6 +103,7 @@ class CoresConfig(StrictModel):
 
 
 class AppConfig(StrictModel):
+    schema_version: Literal[1] = 1
     server: ServerConfig = Field(default_factory=ServerConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     cores: CoresConfig = Field(default_factory=CoresConfig)
@@ -115,6 +118,7 @@ class AppConfig(StrictModel):
         )
         dns = ", ".join(f'"{item}"' for item in wg.client_dns)
         return (
+            "schema_version = 1\n\n"
             "[server]\n"
             f'domain = "{self.server.domain}"\n\n'
             "[network]\n"
@@ -137,6 +141,8 @@ class AppConfig(StrictModel):
 
 
 def load_config(path: Path) -> AppConfig:
+    if path.is_symlink() and not path.exists():
+        raise ConfigError(f"refusing broken configuration symlink: {path}")
     if not path.exists():
         return AppConfig()
     try:

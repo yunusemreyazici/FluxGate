@@ -20,6 +20,8 @@ def test_config_loads_toml_and_rejects_unknown_fields(tmp_path: Path) -> None:
     loaded = load_config(config)
     assert loaded.server.domain == "vpn.example.com"
     assert loaded.cores.wireguard.listen_port == 1234
+    assert loaded.schema_version == 1
+    assert AppConfig().as_toml().startswith("schema_version = 1")
 
     config.write_text("[server]\nmisspelled = true\n")
     with pytest.raises(ConfigError, match="misspelled"):
@@ -39,6 +41,10 @@ def test_config_validates_ports_interfaces_and_client_names() -> None:
         AppConfig.model_validate({"cores": {"wireguard": {"address": "10.0.0.0/24"}}})
     with pytest.raises(ValidationError):
         AppConfig.model_validate({"cores": {"wireguard": {"client_dns": ["not-an-ip"]}}})
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"cores": {"wireguard": {"client_dns": ["2606:4700:4700::1111"]}}})
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"network": {"ipv4": "true"}})
 
 
 def test_paths_accept_only_absolute_traversal_free_overrides(tmp_path: Path) -> None:
@@ -58,6 +64,29 @@ def test_state_round_trip_is_atomic_and_private(tmp_path: Path) -> None:
     assert (store.path.stat().st_mode & 0o777) == 0o600
     assert not list(store.path.parent.glob(f".{store.path.name}.*"))
     assert json.loads(store.path.read_text())["schema_version"] == 1
+
+
+def test_future_config_and_state_schema_versions_fail_closed(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text("schema_version = 2\n")
+    with pytest.raises(ConfigError, match="schema_version"):
+        load_config(config)
+    state = tmp_path / "state.json"
+    state.write_text('{"schema_version": 2, "clients": [], "providers": {}}')
+    with pytest.raises(StateError, match="schema_version"):
+        StateStore(state).load()
+    state.write_text(
+        '{"schema_version": 1, "clients": [{"name": "alice", "enabled": "false"}], "providers": {}}'
+    )
+    with pytest.raises(StateError, match="enabled"):
+        StateStore(state).load()
+
+
+def test_invalid_state_lock_file_has_a_structured_error(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.json")
+    store.path.with_suffix(".json.lock").mkdir()
+    with pytest.raises(StateError, match="cannot acquire state lock"), store.lock():
+        pytest.fail("invalid lock path must not be entered")
 
 
 def test_atomic_write_refuses_symlink_destination(tmp_path: Path) -> None:
