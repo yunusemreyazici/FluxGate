@@ -1,0 +1,24 @@
+# Security Policy
+
+## Supported versions
+
+FluxGate is pre-1.0. Security fixes are provided for the latest published minor release.
+
+## Reporting a vulnerability
+
+Do not open a public issue for a suspected vulnerability. Contact the maintainer privately through
+the security-reporting mechanism on the project hosting page. Include the affected version,
+reproduction steps, impact, and any suggested mitigation. Avoid including real private keys,
+tokens, passwords, server addresses, or client configurations.
+
+## Operational expectations
+
+FluxGate manages privileged networking state. Review a dry-run before enabling a core, keep
+`/etc/fluxgate` and `/var/lib/fluxgate` root-owned, restrict backups, and do not copy generated
+client exports into logs or issue reports. FluxGate owns only its named nftables table and must not
+be granted permission to flush unrelated firewall state.
+
+Private keys and generated client files are written with mode `0600`. Atomic writers reject
+symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
+DNS, and safe distribution and revocation of client configurations.
+

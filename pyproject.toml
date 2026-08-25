@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fluxgate"
+version = "0.1.0"
+description = "Modular multi-transport connectivity server manager"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Yunus Emre YAZICI" }]
+dependencies = ["pydantic>=2.8,<3", "typer>=0.12,<1"]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.11",
+  "pytest>=8.3",
+  "pytest-cov>=5",
+  "ruff>=0.6",
+  "types-setuptools",
+]
+
+[project.scripts]
+fluxgate = "fluxgate.cli.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fluxgate"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = ["integration: tests requiring Linux or elevated privileges"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["fluxgate"]
+mypy_path = "src"
+
