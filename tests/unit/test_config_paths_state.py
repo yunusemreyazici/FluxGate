@@ -12,6 +12,14 @@ from fluxgate.core.paths import PathLayout
 from fluxgate.core.state import StateStore, atomic_write
 
 
+def test_readme_exposes_canonical_project_navigation() -> None:
+    readme = (Path(__file__).parents[2] / "README.md").read_text()
+    assert "https://github.com/yunusemreyazici/FluxGate" in readme
+    assert "https://github.com/yunusemreyazici/FluxGate/releases" in readme
+    assert "https://github.com/yunusemreyazici/FluxGate/security/policy" in readme
+    assert "[Testing](docs/testing.md)" in readme
+
+
 def test_config_loads_toml_and_rejects_unknown_fields(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(

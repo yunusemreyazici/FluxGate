@@ -323,6 +323,7 @@ class OpenVPNProvider(CoreProvider):
                 and self.crl_path.is_file()
                 and self.crl_path.read_bytes() == self.pki.crl_path.read_bytes()
                 and self.crl_marker.read_bytes() == self.OWNER
+                and self.crl_valid()
                 and self._ccd_valid()
             )
         except (OSError, ProviderError):
@@ -335,7 +336,7 @@ class OpenVPNProvider(CoreProvider):
                 self.pki.complete()
                 and self.crl_path.is_file()
                 and self.crl_path.read_bytes() == self.pki.crl_path.read_bytes()
-                and self.pki.crl_valid(self.crl_path)
+                and self.pki.crl_valid(self.crl_path, renewal_window=self.pki.CRL_RENEWAL_WINDOW)
             )
         except (OSError, ProviderError):
             return False
@@ -450,6 +451,16 @@ class OpenVPNProvider(CoreProvider):
                 lambda: self.pki.restore(pki_checkpoint),
             )
 
+        crl_refresh_needed = self.pki.complete() and not self.pki.crl_valid(
+            self.pki.crl_path, renewal_window=self.pki.CRL_RENEWAL_WINDOW
+        )
+        if crl_refresh_needed:
+            plan.add(
+                "Would refresh: OpenVPN certificate revocation list",
+                self.pki.refresh_crl,
+                lambda: self.pki.restore(pki_checkpoint),
+            )
+
         ccd_checkpoint = self._directory_checkpoint(self.ccd_dir)
         if not self._ccd_valid():
 
@@ -479,8 +490,12 @@ class OpenVPNProvider(CoreProvider):
             else:
                 atomic_write(self.crl_marker, old_crl_marker, 0o600)
 
-        if not self.crl_path.exists() or (
-            self.pki.complete() and self.crl_path.read_bytes() != self.pki.crl_path.read_bytes()
+        if (
+            crl_refresh_needed
+            or not self.crl_path.exists()
+            or (
+                self.pki.complete() and self.crl_path.read_bytes() != self.pki.crl_path.read_bytes()
+            )
         ):
             plan.add(
                 "Would publish: OpenVPN certificate revocation list",
@@ -816,7 +831,8 @@ class OpenVPNProvider(CoreProvider):
         revoked_crl: list[bytes] = []
 
         def revoke() -> None:
-            revoked_crl.append(self.pki.revoke_client(certificate_path))
+            serial = str(self._credential(client)["serial"])
+            revoked_crl.append(self.pki.revoke_client(certificate_path, serial))
 
         def restore_files() -> None:
             for path, (content, mode) in old_files.items():

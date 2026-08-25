@@ -7,6 +7,8 @@ import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -31,6 +33,8 @@ class IssuedCertificate:
 
 class OpenVPNPKI:
     OWNER = b"Managed by FluxGate OpenVPN PKI\n"
+    CRL_VALIDITY_DAYS = 825
+    CRL_RENEWAL_WINDOW = timedelta(days=60)
     REQUIRED = (
         "OWNER",
         "openssl.cnf",
@@ -198,6 +202,22 @@ class OpenVPNPKI:
     def _run(self, args: list[str]) -> str:
         return self.context.runner.run(args, mutate=True, timeout=120.0).stdout
 
+    def _generate_crl(self, root: Path) -> None:
+        self._run(
+            [
+                "openssl",
+                "ca",
+                "-batch",
+                "-config",
+                str(root / "openssl.cnf"),
+                "-gencrl",
+                "-crldays",
+                str(self.CRL_VALIDITY_DAYS),
+                "-out",
+                str(root / "crl.pem"),
+            ]
+        )
+
     def _initialize_stage(self, stage: Path) -> None:
         (stage / "newcerts").mkdir(mode=0o700)
         atomic_write(stage / "OWNER", self.OWNER, 0o600)
@@ -280,18 +300,7 @@ class OpenVPNPKI:
             ]
         )
         self._run(["openvpn", "--genkey", "secret", str(stage / "tls-crypt.key")])
-        self._run(
-            [
-                "openssl",
-                "ca",
-                "-batch",
-                "-config",
-                str(stage / "openssl.cnf"),
-                "-gencrl",
-                "-out",
-                str(stage / "crl.pem"),
-            ]
-        )
+        self._generate_crl(stage)
         for name in ("ca.key", "server.key", "tls-crypt.key"):
             os.chmod(stage / name, 0o600)
 
@@ -355,9 +364,11 @@ class OpenVPNPKI:
         atomic_write(stage / "openssl.cnf", self._config(stage), 0o600)
 
     def _commit_database(self, stage: Path) -> None:
+        # Publish the advanced serial before its index entry. An abrupt interruption can then
+        # skip an unused serial, but cannot reuse a serial already present in the index.
         for name, mode in (
-            ("index.txt", 0o600),
             ("serial", 0o600),
+            ("index.txt", 0o600),
             ("crlnumber", 0o600),
             ("crl.pem", 0o644),
         ):
@@ -432,18 +443,7 @@ class OpenVPNPKI:
                 if not serial_output.startswith("serial="):
                     raise ProviderError("OpenSSL did not return the client certificate serial")
                 serial = serial_output.removeprefix("serial=")
-                self._run(
-                    [
-                        "openssl",
-                        "ca",
-                        "-batch",
-                        "-config",
-                        str(stage / "openssl.cnf"),
-                        "-gencrl",
-                        "-out",
-                        str(stage / "crl.pem"),
-                    ]
-                )
+                self._generate_crl(stage)
                 os.chmod(key, 0o600)
                 result = IssuedCertificate(
                     private_key=key.read_bytes(),
@@ -462,7 +462,47 @@ class OpenVPNPKI:
                 ) from error
             raise
 
-    def revoke_client(self, certificate_path: Path) -> bytes:
+    @staticmethod
+    def _normalized_serial(serial: str) -> str:
+        if not serial or any(character not in "0123456789ABCDEFabcdef" for character in serial):
+            raise ProviderError("invalid OpenVPN certificate serial")
+        return serial.lstrip("0").upper() or "0"
+
+    def serial_revoked(self, serial: str) -> bool:
+        expected = self._normalized_serial(serial)
+        if not self._complete():
+            raise ProviderError("managed OpenVPN PKI is incomplete")
+        for line in (self.root / "index.txt").read_text().splitlines():
+            fields = line.split("\t")
+            if len(fields) >= 4 and self._normalized_serial(fields[3]) == expected:
+                return fields[0] == "R"
+        return False
+
+    def refresh_crl(self) -> bytes:
+        checkpoint = self.checkpoint()
+        self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix=".openvpn-crl.", dir=self.root.parent
+            ) as temporary:
+                stage = Path(temporary)
+                self._copy_stage(stage)
+                self._generate_crl(stage)
+                crl = (stage / "crl.pem").read_bytes()
+                self._commit_database(stage)
+                return crl
+        except BaseException as error:
+            try:
+                self.restore(checkpoint)
+            except BaseException as rollback_error:
+                raise ProviderError(
+                    f"OpenVPN CRL refresh failed: {error}; rollback failed: {rollback_error}"
+                ) from error
+            raise
+
+    def revoke_client(self, certificate_path: Path, serial: str) -> bytes:
+        if self.serial_revoked(serial):
+            return self.refresh_crl()
         if certificate_path.is_symlink() or not certificate_path.is_file():
             raise ProviderError("OpenVPN client certificate is unavailable for revocation")
         checkpoint = self.checkpoint()
@@ -488,18 +528,7 @@ class OpenVPNPKI:
                         "cessationOfOperation",
                     ]
                 )
-                self._run(
-                    [
-                        "openssl",
-                        "ca",
-                        "-batch",
-                        "-config",
-                        str(stage / "openssl.cnf"),
-                        "-gencrl",
-                        "-out",
-                        str(stage / "crl.pem"),
-                    ]
-                )
+                self._generate_crl(stage)
                 crl = (stage / "crl.pem").read_bytes()
                 self._commit_database(stage)
                 return crl
@@ -521,14 +550,38 @@ class OpenVPNPKI:
         )
         return result.returncode == 0
 
-    def crl_valid(self, path: Path) -> bool:
+    def crl_valid(self, path: Path, *, renewal_window: timedelta | None = None) -> bool:
         if path.is_symlink() or not path.is_file():
             return False
         result = self.context.runner.run(
-            ["openssl", "crl", "-noout", "-in", str(path)],
+            [
+                "openssl",
+                "crl",
+                "-verify",
+                "-CAfile",
+                str(self.ca_certificate_path),
+                "-nextupdate",
+                "-noout",
+                "-in",
+                str(path),
+            ],
             check=False,
         )
-        return result.returncode == 0
+        if result.returncode != 0:
+            return False
+        line = next(
+            (item for item in result.stdout.splitlines() if item.startswith("nextUpdate=")), None
+        )
+        if line is None:
+            return False
+        try:
+            expires = parsedate_to_datetime(line.removeprefix("nextUpdate="))
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        minimum = datetime.now(timezone.utc) + (renewal_window or timedelta())
+        return expires > minimum
 
     def _read(self, path: Path, *, private: bool) -> str:
         if path.is_symlink() or not path.is_file():

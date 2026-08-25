@@ -19,6 +19,18 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
   credentials, and `client disable CLIENT PROVIDER` revokes only that provider.
 - State schema 1 remains unchanged because v0.1 already stored credentials by provider name.
 
+### Fixed
+
+- Verify CRL signatures and expiry, generate CRLs for the certificate lifetime, and safely refresh
+  CRLs approaching expiry.
+- Keep provider credentials in state until host revocation succeeds, with idempotent OpenVPN
+  revocation recovery when the final state write is interrupted.
+- Require systemd disable postconditions and roll back failed disable attempts.
+- Preflight and transactionally restore unified export trees after unsafe destinations or partial
+  write failures.
+- Preserve the previous installer release if command-link setup fails during an interrupted
+  installation.
+
 ## [0.1.1] - 2026-08-25
 
 ### Fixed

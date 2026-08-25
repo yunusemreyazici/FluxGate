@@ -91,22 +91,17 @@ class ClientService:
                     f"client {client.name} has no {core_provider.display_name} credentials"
                 )
             original = client.model_copy(deep=True)
+            core_provider.revoke_client(original)
             client.provider_credentials.pop(provider_name, None)
             client.enabled = bool(client.provider_credentials)
             self._replace(state.clients, client)
-            self.state.save(state)
             try:
-                core_provider.revoke_client(original)
+                self.state.save(state)
             except BaseException as error:
-                self._replace(state.clients, original)
-                try:
-                    self.state.save(state)
-                except BaseException as rollback_error:
-                    raise FluxGateError(
-                        f"client provider disable failed: {error}; state rollback failed: "
-                        f"{rollback_error}"
-                    ) from error
-                raise
+                raise FluxGateError(
+                    f"{core_provider.display_name} was revoked but state update failed: {error}; "
+                    "rerun the command to reconcile state"
+                ) from error
             return client
 
     @staticmethod
@@ -125,21 +120,27 @@ class ClientService:
                 if core_provider.name not in client.provider_credentials:
                     continue
                 original = client.model_copy(deep=True)
+                core_provider.revoke_client(original)
                 client.provider_credentials.pop(core_provider.name, None)
                 client.enabled = bool(client.provider_credentials)
                 self._replace(state.clients, client)
-                self.state.save(state)
                 try:
-                    core_provider.revoke_client(original)
-                except BaseException:
-                    self._replace(state.clients, original)
                     self.state.save(state)
-                    raise
+                except BaseException as error:
+                    raise FluxGateError(
+                        f"{core_provider.display_name} was revoked but state update failed: "
+                        f"{error}; rerun the command to reconcile state"
+                    ) from error
             return client
 
     def export(
         self, identity: str, destination: Path, provider_name: str | None = None
     ) -> list_type[Path]:
+        for candidate in (destination, *destination.parents):
+            if candidate.is_symlink():
+                raise FluxGateError(f"refusing export through symlinked directory: {candidate}")
+        if destination.exists() and not destination.is_dir():
+            raise FluxGateError(f"export parent is not a directory: {destination}")
         with self.state.lock():
             client = self._find(self.state.load().clients, identity)
             provider_names = (
@@ -161,65 +162,141 @@ class ClientService:
                 for artifact in provider.export_client(client):
                     artifacts.append((name, artifact.name, artifact.content.encode()))
 
-        root = destination / client.name
-        marker = root / ".fluxgate-export.json"
-        marker_content = (
-            json.dumps(
-                {"schema_version": 1, "client_id": str(client.id), "client_name": client.name},
-                sort_keys=True,
-            ).encode()
-            + b"\n"
-        )
-        if root.is_symlink() or (root.exists() and not root.is_dir()):
-            raise FluxGateError(f"unsafe export destination: {root}")
-        if root.exists() and stat.S_IMODE(root.stat().st_mode) & 0o077:
-            raise FluxGateError(f"export destination must not be group/world accessible: {root}")
-        if (
-            root.exists()
-            and any(root.iterdir())
-            and (
-                marker.is_symlink() or not marker.is_file() or marker.read_bytes() != marker_content
+            root = destination / client.name
+            marker = root / ".fluxgate-export.json"
+            marker_content = (
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "client_id": str(client.id),
+                        "client_name": client.name,
+                    },
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
             )
-        ):
-            raise FluxGateError(f"refusing to overwrite unmanaged export directory: {root}")
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        atomic_write(marker, marker_content, 0o600)
-        for existing in root.iterdir():
-            if existing == marker or existing.name in client.provider_credentials:
-                continue
-            if existing.is_symlink() or not existing.is_dir():
-                raise FluxGateError(f"unsafe stale provider export path: {existing}")
-            for path in existing.iterdir():
-                if path.is_symlink() or not path.is_file():
-                    raise FluxGateError(f"unsafe stale provider export artifact: {path}")
-            for path in existing.iterdir():
-                path.unlink()
-            existing.rmdir()
-        written: list_type[Path] = []
-        for artifact_provider, filename, content in artifacts:
-            provider_dir = root / artifact_provider
-            if provider_dir.is_symlink() or (provider_dir.exists() and not provider_dir.is_dir()):
-                raise FluxGateError(f"unsafe provider export destination: {provider_dir}")
-            provider_dir.mkdir(mode=0o700, exist_ok=True)
-            if stat.S_IMODE(provider_dir.stat().st_mode) & 0o077:
+            if root.is_symlink() or (root.exists() and not root.is_dir()):
+                raise FluxGateError(f"unsafe export destination: {root}")
+            if root.exists() and stat.S_IMODE(root.stat().st_mode) & 0o077:
                 raise FluxGateError(
-                    f"provider export directory must not be group/world accessible: {provider_dir}"
+                    f"export destination must not be group/world accessible: {root}"
                 )
-            expected = {
-                artifact_filename
-                for provider_name, artifact_filename, _ in artifacts
-                if provider_name == artifact_provider
-            }
-            for existing in provider_dir.iterdir():
-                if existing.name in expected:
-                    continue
-                if existing.is_symlink() or not existing.is_file():
-                    raise FluxGateError(f"unsafe stale provider export artifact: {existing}")
-                existing.unlink()
-            path = provider_dir / filename
-            atomic_write(path, content, 0o600)
-            written.append(path)
-        return written
+            if (
+                root.exists()
+                and any(root.iterdir())
+                and (
+                    marker.is_symlink()
+                    or not marker.is_file()
+                    or marker.read_bytes() != marker_content
+                )
+            ):
+                raise FluxGateError(f"refusing to overwrite unmanaged export directory: {root}")
+
+            # Validate the complete managed tree before the first mutation so an unsafe stale
+            # entry cannot leave an otherwise valid export partially reconciled.
+            if root.exists():
+                for existing in root.iterdir():
+                    if existing == marker:
+                        continue
+                    if existing.is_symlink() or not existing.is_dir():
+                        raise FluxGateError(f"unsafe provider export path: {existing}")
+                    if stat.S_IMODE(existing.stat().st_mode) & 0o077:
+                        raise FluxGateError(
+                            "provider export directory must not be group/world accessible: "
+                            f"{existing}"
+                        )
+                    for path in existing.iterdir():
+                        if path.is_symlink() or not path.is_file():
+                            raise FluxGateError(f"unsafe provider export artifact: {path}")
+
+            root_existed = root.exists()
+            root_mode = stat.S_IMODE(root.stat().st_mode) if root_existed else 0o700
+            checkpoint_files = (
+                {
+                    path.relative_to(root): (
+                        path.read_bytes(),
+                        stat.S_IMODE(path.stat().st_mode),
+                    )
+                    for path in root.rglob("*")
+                    if path.is_file()
+                }
+                if root_existed
+                else {}
+            )
+            checkpoint_directories = (
+                {
+                    path.relative_to(root): stat.S_IMODE(path.stat().st_mode)
+                    for path in root.rglob("*")
+                    if path.is_dir()
+                }
+                if root_existed
+                else {}
+            )
+
+            def restore_export() -> None:
+                if not root.exists():
+                    if not root_existed:
+                        return
+                    root.mkdir(parents=True, mode=root_mode)
+                for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+                    if path.is_symlink():
+                        raise FluxGateError(f"cannot roll back export containing symlink: {path}")
+                    relative = path.relative_to(root)
+                    if path.is_file() and relative not in checkpoint_files:
+                        path.unlink()
+                    elif path.is_dir() and relative not in checkpoint_directories:
+                        if any(path.iterdir()):
+                            raise FluxGateError(
+                                f"cannot roll back non-empty unexpected export directory: {path}"
+                            )
+                        path.rmdir()
+                if not root_existed:
+                    root.rmdir()
+                    return
+                root.chmod(root_mode)
+                for relative, mode in sorted(
+                    checkpoint_directories.items(), key=lambda item: len(item[0].parts)
+                ):
+                    directory = root / relative
+                    directory.mkdir(mode=mode, exist_ok=True)
+                    directory.chmod(mode)
+                for relative, (content, mode) in checkpoint_files.items():
+                    atomic_write(root / relative, content, mode)
+
+            try:
+                root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                atomic_write(marker, marker_content, 0o600)
+                for existing in root.iterdir():
+                    if existing == marker or existing.name in client.provider_credentials:
+                        continue
+                    for path in existing.iterdir():
+                        path.unlink()
+                    existing.rmdir()
+                written: list_type[Path] = []
+                for artifact_provider, filename, content in artifacts:
+                    provider_dir = root / artifact_provider
+                    provider_dir.mkdir(mode=0o700, exist_ok=True)
+                    expected = {
+                        artifact_filename
+                        for selected_provider, artifact_filename, _ in artifacts
+                        if selected_provider == artifact_provider
+                    }
+                    for existing in provider_dir.iterdir():
+                        if existing.name in expected:
+                            continue
+                        existing.unlink()
+                    path = provider_dir / filename
+                    atomic_write(path, content, 0o600)
+                    written.append(path)
+                return written
+            except BaseException as error:
+                try:
+                    restore_export()
+                except BaseException as rollback_error:
+                    raise FluxGateError(
+                        f"client export failed: {error}; rollback failed: {rollback_error}"
+                    ) from error
+                raise
 
     def delete(self, identity: str) -> UUID:
         with self.state.lock():
@@ -229,16 +306,17 @@ class ClientService:
                 if core_provider.name not in client.provider_credentials:
                     continue
                 original = client.model_copy(deep=True)
+                core_provider.revoke_client(original)
                 client.provider_credentials.pop(core_provider.name, None)
                 client.enabled = bool(client.provider_credentials)
                 self._replace(state.clients, client)
-                self.state.save(state)
                 try:
-                    core_provider.revoke_client(original)
-                except BaseException:
-                    self._replace(state.clients, original)
                     self.state.save(state)
-                    raise
+                except BaseException as error:
+                    raise FluxGateError(
+                        f"{core_provider.display_name} was revoked but state update failed: "
+                        f"{error}; rerun the command to reconcile state"
+                    ) from error
             state.clients = [stored for stored in state.clients if stored.id != client.id]
             self.state.save(state)
             return client.id

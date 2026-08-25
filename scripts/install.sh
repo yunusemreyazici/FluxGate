@@ -43,9 +43,20 @@ mkdir -p "$install_root/releases"
 release="$install_root/releases/$(date -u +%Y%m%d%H%M%S)-$$"
 mkdir "$release"
 complete=false
+created_bin=false
+next_link="$install_root/current.new.$$"
 cleanup() {
     if [ "$complete" != true ]; then
+        if [ -L "$install_root/current" ] && \
+            [ "$(readlink "$install_root/current")" = "$release" ]; then
+            complete=true
+            return
+        fi
         rm -rf "$release"
+        rm -f "$next_link"
+        if [ "$created_bin" = true ]; then
+            rm -f "$bin_path"
+        fi
     fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -59,12 +70,14 @@ if [ -e "$bin_path" ] || [ -L "$bin_path" ]; then
     [ -L "$bin_path" ] || fail "refusing to replace non-symlink command at $bin_path"
     [ "$(readlink "$bin_path")" = "$expected_link" ] || \
         fail "refusing to replace command not owned by FluxGate: $bin_path"
+else
+    mkdir -p "$(dirname "$bin_path")"
+    ln -s "$expected_link" "$bin_path"
+    created_bin=true
 fi
 
-ln -s "$release" "$install_root/current.new"
-mv -Tf "$install_root/current.new" "$install_root/current"
-mkdir -p "$(dirname "$bin_path")"
-ln -sfn "$expected_link" "$bin_path"
+ln -s "$release" "$next_link"
+mv -Tf "$next_link" "$install_root/current"
 complete=true
 trap - EXIT HUP INT TERM
 

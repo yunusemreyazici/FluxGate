@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import fluxgate.clients.service as client_service_module
 import fluxgate.providers.openvpn.pki as pki_module
 import fluxgate.providers.openvpn.provider as provider_module
 from fluxgate.clients import ClientService
@@ -26,6 +27,7 @@ class FakeOpenSSLRunner(CommandRunner):
         super().__init__()
         self.commands: list[tuple[str, ...]] = []
         self.wireguard_key = 0
+        self.crl_expiring = False
 
     @staticmethod
     def _option(command: tuple[str, ...], option: str) -> Path:
@@ -86,8 +88,17 @@ class FakeOpenSSLRunner(CommandRunner):
             serial_path.write_text(f"{int(serial, 16) + 1:X}\n")
         elif command[:2] == ("openssl", "ca") and "-revoke" in command:
             root = self._option(command, "-config").parent
-            with (root / "index.txt").open("a") as index:
-                index.write("R\trevoked\n")
+            certificate = self._option(command, "-revoke").read_text()
+            serial = certificate.split("SERIAL:", 1)[1].splitlines()[0]
+            lines = (root / "index.txt").read_text().splitlines()
+            rewritten = []
+            for line in lines:
+                fields = line.split("\t")
+                if len(fields) >= 4 and fields[3] == serial:
+                    fields[0] = "R"
+                    line = "\t".join(fields)
+                rewritten.append(line)
+            (root / "index.txt").write_text("\n".join(rewritten) + "\n")
         elif command[:2] == ("openssl", "ca") and "-gencrl" in command:
             root = self._option(command, "-config").parent
             index = (root / "index.txt").read_text()
@@ -95,12 +106,18 @@ class FakeOpenSSLRunner(CommandRunner):
                 self._option(command, "-out"),
                 PEM.format(label="X509 CRL") + f"INDEX:{index}",
             )
+            self.crl_expiring = False
         elif command[:2] == ("openssl", "x509") and "-serial" in command:
             certificate = self._option(command, "-in").read_text()
             serial = certificate.split("SERIAL:", 1)[1].splitlines()[0]
             return CommandResult(command, 0, f"serial={serial}\n")
         elif command[:2] == ("openssl", "x509") and "-checkend" in command:
             return CommandResult(command, 0)
+        elif command[:2] == ("openssl", "crl"):
+            next_update = (
+                "Aug 26 00:00:00 2026 GMT" if self.crl_expiring else "Aug 25 00:00:00 2035 GMT"
+            )
+            return CommandResult(command, 0, f"nextUpdate={next_update}\n")
         return CommandResult(command, 0, input_text or "")
 
 
@@ -331,6 +348,52 @@ def test_client_state_save_failure_revokes_and_removes_generated_artifacts(
     assert not any(path != openvpn.ccd_marker for path in openvpn.ccd_dir.iterdir())
 
 
+def test_revoke_state_save_failure_is_safely_retryable(
+    openvpn: OpenVPNProvider, monkeypatch
+) -> None:
+    openvpn.enable()
+    service = ClientService(openvpn.context.state, ProviderRegistry([openvpn]))
+    service.add("alice")
+    client = service.enable_provider("alice", "openvpn")
+    real_save = openvpn.context.state.save
+
+    def fail_save(state) -> None:
+        raise RuntimeError("injected post-revoke state failure")
+
+    monkeypatch.setattr(openvpn.context.state, "save", fail_save)
+    with pytest.raises(FluxGateError, match="was revoked but state update failed"):
+        service.disable_provider("alice", "openvpn")
+    assert "openvpn" in service.find("alice").provider_credentials
+    assert openvpn.pki.serial_revoked(str(client.provider_credentials["openvpn"]["serial"]))
+    assert not openvpn._client_private_path(client).exists()
+
+    monkeypatch.setattr(openvpn.context.state, "save", real_save)
+    reconciled = service.disable_provider("alice", "openvpn")
+    assert not reconciled.provider_credentials
+    assert not service.find("alice").enabled
+
+
+def test_enable_refreshes_a_crl_near_expiry(openvpn: OpenVPNProvider) -> None:
+    openvpn.enable()
+    runner = openvpn.context.runner
+    assert isinstance(runner, FakeOpenSSLRunner)
+    runner.crl_expiring = True
+    before = len([command for command in runner.commands if "-gencrl" in command])
+    assert openvpn.enable().changed
+    after = len([command for command in runner.commands if "-gencrl" in command])
+    assert after == before + 1
+    assert any(
+        "-verify" in command and "-nextupdate" in command
+        for command in runner.commands
+        if command[:2] == ("openssl", "crl")
+    )
+    assert any(
+        command[command.index("-crldays") + 1] == "825"
+        for command in runner.commands
+        if "-gencrl" in command
+    )
+
+
 def test_revoke_pki_failure_restores_client_state_and_artifacts(
     openvpn: OpenVPNProvider, monkeypatch
 ) -> None:
@@ -403,6 +466,34 @@ def test_one_identity_supports_both_providers_selective_revoke_and_unified_expor
     }
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in written)
     assert stat.S_IMODE((output / "iphone").stat().st_mode) == 0o700
+    assert service.export("iphone", output) == written
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    symlinked_output = tmp_path / "symlinked-output"
+    symlinked_output.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(FluxGateError, match="symlinked directory"):
+        service.export("iphone", symlinked_output)
+    assert not (outside / "iphone").exists()
+
+    openvpn_export = output / "iphone" / "openvpn" / "iphone.ovpn"
+    openvpn_export.write_text("preexisting export\n")
+    openvpn_export.chmod(0o600)
+    real_atomic_write = client_service_module.atomic_write
+    failed = False
+
+    def fail_wireguard_export(path: Path, content: bytes, mode: int = 0o600) -> None:
+        nonlocal failed
+        if path.name == "iphone.conf" and not failed:
+            failed = True
+            raise OSError("injected export failure")
+        real_atomic_write(path, content, mode)
+
+    monkeypatch.setattr(client_service_module, "atomic_write", fail_wireguard_export)
+    with pytest.raises(OSError, match="injected export failure"):
+        service.export("iphone", output)
+    assert openvpn_export.read_text() == "preexisting export\n"
+
     service.disable_provider("iphone", "wireguard")
     remaining = service.find("iphone")
     assert remaining.enabled

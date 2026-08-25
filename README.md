@@ -5,7 +5,8 @@ plane and CLI for independently implemented VPN and tunnel engines.
 
 **Project links:** [Repository](https://github.com/yunusemreyazici/FluxGate) ·
 [Releases](https://github.com/yunusemreyazici/FluxGate/releases) ·
-[Security](https://github.com/yunusemreyazici/FluxGate/security/policy)
+[Security](https://github.com/yunusemreyazici/FluxGate/security/policy) ·
+[Testing](docs/testing.md)
 
 FluxGate is **not** a VPN protocol, is not dependent on 3x-ui, and is not a bundle of unrelated
 installation shell scripts. Protocol profiles and core implementations are deliberately separate:

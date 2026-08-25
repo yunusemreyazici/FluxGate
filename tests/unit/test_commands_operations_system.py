@@ -362,3 +362,29 @@ def test_systemd_success_exit_still_requires_active_postcondition() -> None:
         services.enable_now("wg-quick@fg0.service")
     assert ("systemctl", "disable", "wg-quick@fg0.service") in runner.commands
     assert ("systemctl", "stop", "wg-quick@fg0.service") in runner.commands
+
+
+class FalseDisableSystemdRunner:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+
+    def run(self, args, **kwargs):
+        from fluxgate.core.commands import CommandResult
+
+        command = tuple(args)
+        self.commands.append(command)
+        if command[:3] in {
+            ("systemctl", "is-enabled", "--quiet"),
+            ("systemctl", "is-active", "--quiet"),
+        }:
+            return CommandResult(command, 0)
+        return CommandResult(command, 0)
+
+
+def test_systemd_disable_success_exit_requires_inactive_postcondition() -> None:
+    runner = FalseDisableSystemdRunner()
+    services = SystemdServiceManager(runner)  # type: ignore[arg-type]
+    with pytest.raises(StateError, match="did not become disabled and inactive"):
+        services.disable_now("openvpn-server@fluxgate.service")
+    assert ("systemctl", "enable", "openvpn-server@fluxgate.service") in runner.commands
+    assert ("systemctl", "start", "openvpn-server@fluxgate.service") in runner.commands
