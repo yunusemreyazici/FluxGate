@@ -18,7 +18,14 @@ FluxGate manages privileged networking state. Review a dry-run before enabling a
 client exports into logs or issue reports. FluxGate owns only its named nftables table and must not
 be granted permission to flush unrelated firewall state.
 
+Commands that mutate host networking, services, packages, firewall rules, forwarding settings, or
+credentials require root. FluxGate refuses to adopt foreign WireGuard interfaces, configuration,
+systemd units, command links, or nftables state when ownership cannot be established. Disable and
+rollback operations are scoped to FluxGate-owned resources.
+
 Private keys and generated client files are written with mode `0600`. Atomic writers reject
 symlink destinations. Operators remain responsible for host updates, SSH access controls, secure
 DNS, and safe distribution and revocation of client configurations.
 
+WireGuard is the only supported provider in v0.1.0. OpenVPN, sing-box, and Xray-core are
+non-operational placeholders; AmneziaWG and other roadmap integrations are also unsupported.

@@ -10,13 +10,22 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate 0.1 is an early release. WireGuard is the reference implementation. OpenVPN, sing-box,
-and Xray-core are registered, visible placeholders that refuse enable operations; they are not
-claimed as supported.
+FluxGate v0.1.0 is an early-stage release.
+
+**Supported now:** WireGuard.
+
+**Planned:** OpenVPN, sing-box, Xray-core, AmneziaWG, and later integrations and features. The
+registered OpenVPN, sing-box, and Xray-core entries are visible placeholders that refuse enable
+operations; they are not functioning providers in v0.1.0.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
 changes use apt, systemd, and nftables.
+
+The complete privileged provider lifecycle, service restart, reboot persistence, cleanup, and a
+real end-to-end WireGuard client connection were validated on an Ubuntu 24.04 VPS. Python/runtime
+compatibility was validated for the native Python floors relevant to Ubuntu 22.04 and Debian 12;
+this does not imply that the full privileged lifecycle was exercised on all three distributions.
 
 ## Architecture
 
@@ -143,7 +152,8 @@ pytest
 ```
 
 Normal tests use temporary paths and fakes. Privileged Linux integration tests belong under the
-`integration` marker and are not part of the normal unit suite.
+`integration` marker and are not part of the normal unit suite. See [Testing](docs/testing.md) for
+the v0.1.0 validation layers and full-tunnel test safety guidance.
 
 ## Roadmap
 
