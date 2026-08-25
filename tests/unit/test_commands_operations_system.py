@@ -6,6 +6,7 @@ from fluxgate.core.commands import CommandRunner, redacted_args
 from fluxgate.core.errors import CommandError, FluxGateError, StateError
 from fluxgate.core.operations import OperationPlan
 from fluxgate.system.firewall import NftablesFirewallManager
+from fluxgate.system.forwarding import ForwardingManager
 from fluxgate.system.os import detect_os
 from fluxgate.system.packages import AptPackageManager
 from fluxgate.system.services import SystemdServiceManager
@@ -107,6 +108,10 @@ class RecordingRunner:
             return CommandResult(command, 0 if self.service_active else 1)
         elif command[:2] == ("systemctl", "enable"):
             self.service_enabled = True
+            if "--now" in command:
+                self.service_active = True
+                if self.rules_path is not None:
+                    self.live_rules = self.rules_path.read_text()
         elif command[:2] == ("systemctl", "disable"):
             self.service_enabled = False
             if "--now" in command:
@@ -123,7 +128,7 @@ def test_firewall_creates_only_identifiable_fluxgate_rules(tmp_path: Path) -> No
     runner = RecordingRunner(rules)
     unit = tmp_path / "fluxgate-firewall.service"
     firewall = NftablesFirewallManager(runner, rules, unit)  # type: ignore[arg-type]
-    assert firewall.ensure_nat("10.77.0.0/24", "eth0")
+    assert firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
     rendered = [" ".join(command) for command in runner.commands]
     assert "table inet fluxgate" in rules.read_text()
     assert "fluxgate-managed" in rules.read_text()
@@ -133,7 +138,7 @@ def test_firewall_creates_only_identifiable_fluxgate_rules(tmp_path: Path) -> No
     assert "*fluxgate-managed*chain*postrouting*fluxgate-managed*" in unit.read_text()
     assert "ExecStartPre=-/usr/sbin/nft delete" not in unit.read_text()
     assert "After=nftables.service" in unit.read_text()
-    assert firewall.configured("10.77.0.0/24", "eth0")
+    assert firewall.configured("wireguard", "10.77.0.0/24", "eth0")
     assert all("flush" not in command for command in rendered)
 
 
@@ -145,7 +150,7 @@ def test_firewall_refuses_to_replace_unmanaged_files(tmp_path: Path) -> None:
         runner, rules, tmp_path / "fluxgate-firewall.service"
     )
     with pytest.raises(StateError, match="unmanaged"):
-        firewall.ensure_nat("10.77.0.0/24", "eth0")
+        firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
     assert rules.read_text() == "user-owned\n"
 
 
@@ -182,16 +187,16 @@ def test_firewall_is_idempotent_and_restores_previous_rules_on_failure(tmp_path:
     firewall = NftablesFirewallManager(  # type: ignore[arg-type]
         runner, rules, tmp_path / "fluxgate-firewall.service"
     )
-    assert firewall.ensure_nat("10.77.0.0/24", "eth0")
+    assert firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
     old_rules = rules.read_bytes()
     old_live = runner.live_rules
-    assert not firewall.ensure_nat("10.77.0.0/24", "eth0")
+    assert not firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
     restart_count = runner.commands.count(("systemctl", "restart", firewall.UNIT))
     assert restart_count == 1
 
     runner.fail_on = ("systemctl", "restart")
     with pytest.raises(RuntimeError, match="injected"):
-        firewall.ensure_nat("10.77.0.0/24", "eth1")
+        firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth1")
     assert rules.read_bytes() == old_rules
     assert runner.live_rules == old_live
     assert runner.service_enabled
@@ -203,13 +208,51 @@ def test_firewall_disable_removes_only_owned_artifacts(tmp_path: Path) -> None:
     unit = tmp_path / "fluxgate-firewall.service"
     runner = RecordingRunner(rules)
     firewall = NftablesFirewallManager(runner, rules, unit)  # type: ignore[arg-type]
-    firewall.ensure_nat("10.77.0.0/24", "eth0")
+    firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
     assert firewall.remove()
     assert runner.live_rules is None
     assert not rules.exists()
     assert not unit.exists()
     assert not runner.service_enabled
     assert all("flush" not in command for command in runner.commands)
+
+
+def test_firewall_tracks_two_provider_rules_and_removes_only_one(tmp_path: Path) -> None:
+    rules = tmp_path / "fluxgate.nft"
+    unit = tmp_path / "fluxgate-firewall.service"
+    runner = RecordingRunner(rules)
+    firewall = NftablesFirewallManager(runner, rules, unit)  # type: ignore[arg-type]
+    firewall.ensure_nat("wireguard", "10.77.0.0/24", "eth0")
+    firewall.ensure_nat("openvpn", "10.78.0.0/24", "eth0")
+    content = rules.read_text()
+    assert content.count('comment "fluxgate-managed:wireguard"') == 1
+    assert content.count('comment "fluxgate-managed:openvpn"') == 1
+    assert firewall.remove_nat("wireguard")
+    assert not firewall.managed("wireguard")
+    assert firewall.configured("openvpn", "10.78.0.0/24", "eth0")
+    assert "10.77.0.0/24" not in rules.read_text()
+    assert "10.78.0.0/24" in rules.read_text()
+    assert runner.service_enabled and runner.service_active
+    assert all("flush" not in command for command in runner.commands)
+
+
+def test_forwarding_lease_migrates_v01_and_survives_one_provider_release(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "99-fluxgate.conf"
+    proc = tmp_path / "ip_forward"
+    config.write_bytes(ForwardingManager.LEGACY_CONFIG)
+    proc.write_text("1\n")
+    forwarding = ForwardingManager(config, RecordingRunner(), proc)  # type: ignore[arg-type]
+    assert forwarding.configured("wireguard")
+    assert forwarding.acquire("openvpn")
+    assert config.read_text() == (
+        "# Managed by FluxGate\n# Consumers: openvpn, wireguard\nnet.ipv4.ip_forward = 1\n"
+    )
+    assert forwarding.release("wireguard")
+    assert forwarding.configured("openvpn")
+    assert config.exists()
+    assert proc.read_text() == "1\n"
 
 
 def test_firewall_removes_stale_service_enablement_when_unit_file_is_missing(

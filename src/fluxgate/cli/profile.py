@@ -11,8 +11,8 @@ profile_app = typer.Typer(help="Inspect available protocol profiles.", no_args_i
 
 PROFILES = {
     "wireguard": ("wireguard", "available"),
-    "openvpn-udp": ("openvpn", "planned for 0.2"),
-    "openvpn-tcp": ("openvpn", "planned for 0.2"),
+    "openvpn-udp": ("openvpn", "available"),
+    "openvpn-tcp": ("openvpn", "not available; UDP only"),
     "vless": ("sing-box/xray", "planned"),
     "vless-reality": ("sing-box/xray", "planned"),
     "hysteria2": ("sing-box", "planned"),

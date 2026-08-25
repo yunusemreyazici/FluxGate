@@ -44,6 +44,24 @@ def test_cli_errors_are_noninteractive_and_return_one() -> None:
     assert "Error: unknown profile: does-not-exist" in result.stderr
 
 
+def test_explicit_client_cli_creates_identity_without_provisioning_every_provider(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("FLUXGATE_CONFIG_DIR", str(tmp_path / "etc"))
+    monkeypatch.setenv("FLUXGATE_DATA_DIR", str(tmp_path / "data"))
+    result = CliRunner().invoke(app, ["client", "add", "automation-client"])
+    assert result.exit_code == 0
+    assert '"providers": []' in result.stdout
+    assert "private" not in result.stdout.lower()
+    listed = CliRunner().invoke(app, ["client", "list"])
+    assert listed.exit_code == 0
+    assert "automation-client" in listed.stdout
+    assert "unprovisioned" in listed.stdout
+    failed = CliRunner().invoke(app, ["client", "enable", "automation-client", "wireguard"])
+    assert failed.exit_code == 1
+    assert "provider is not running: wireguard" in failed.stderr
+
+
 def test_client_json_object_has_a_versioned_secret_free_shape() -> None:
     client = Client(
         name="alice",

@@ -203,8 +203,8 @@ class WireGuardProvider(CoreProvider):
         outbound = self.context.config.network.outbound_interface
         return (
             self.context.forwarding.enabled()
-            and self.context.forwarding.configured()
-            and self.context.firewall.configured(network, outbound)
+            and self.context.forwarding.configured(self.name)
+            and self.context.firewall.configured(self.name, network, outbound)
         )
 
     def configuration_valid(self) -> bool:
@@ -235,10 +235,14 @@ class WireGuardProvider(CoreProvider):
             )
         detection = self.detect()
         service_active = (
-            self.context.services.is_active(self.unit) if detection.available else False
+            self.context.services.is_active(self.unit)
+            if detection.available and not self.context.dry_run
+            else False
         )
         service_enabled = (
-            self.context.services.is_enabled(self.unit) if detection.available else False
+            self.context.services.is_enabled(self.unit)
+            if detection.available and not self.context.dry_run
+            else False
         )
         interface_present = self._interface_exists()
         if interface_present and not service_active:
@@ -310,19 +314,28 @@ class WireGuardProvider(CoreProvider):
         if not config_current:
             plan.add(f"Would converge: {self.config_path}", write_config, restore_config)
         forwarding_checkpoint = self.context.forwarding.checkpoint()
-        if not self.context.forwarding.enabled() or not self.context.forwarding.configured():
+        if not self.context.forwarding.enabled() or not self.context.forwarding.configured(
+            self.name
+        ):
             plan.add(
                 "Would enable: IPv4 forwarding",
-                lambda: self.context.forwarding.ensure(),
+                lambda: self.context.forwarding.acquire(self.name),
                 lambda: self.context.forwarding.restore(forwarding_checkpoint),
             )
         network = str(self._network())
         outbound = self.context.config.network.outbound_interface
-        firewall_checkpoint = self.context.firewall.checkpoint()
-        if not self.context.firewall.configured(network, outbound):
+        firewall_checkpoint = (
+            object() if self.context.dry_run else self.context.firewall.checkpoint()
+        )
+        firewall_configured = (
+            False
+            if self.context.dry_run
+            else self.context.firewall.configured(self.name, network, outbound)
+        )
+        if not firewall_configured:
             plan.add(
                 "Would configure: persistent FluxGate nftables NAT rules",
-                lambda: self.context.firewall.ensure_nat(network, outbound),
+                lambda: self.context.firewall.ensure_nat(self.name, network, outbound),
                 lambda: self.context.firewall.restore(firewall_checkpoint),
             )
         service_was_active, service_was_enabled = service_active, service_enabled
@@ -356,12 +369,21 @@ class WireGuardProvider(CoreProvider):
 
     def _disable_locked(self) -> OperationResult:
         self._assert_config_ownership()
-        service_active = self.context.services.is_active(self.unit)
-        service_enabled = self.context.services.is_enabled(self.unit)
-        firewall_managed = self.context.firewall.managed()
-        forwarding_managed = self.context.forwarding.configured()
+        enabled_in_state = self._enabled_in_state()
+        service_active = (
+            enabled_in_state if self.context.dry_run else self.context.services.is_active(self.unit)
+        )
+        service_enabled = (
+            enabled_in_state
+            if self.context.dry_run
+            else self.context.services.is_enabled(self.unit)
+        )
+        firewall_managed = (
+            enabled_in_state if self.context.dry_run else self.context.firewall.managed(self.name)
+        )
+        forwarding_managed = self.context.forwarding.configured(self.name)
         if not (
-            self._enabled_in_state()
+            enabled_in_state
             or service_active
             or service_enabled
             or firewall_managed
@@ -380,15 +402,15 @@ class WireGuardProvider(CoreProvider):
         if firewall_managed:
             firewall_checkpoint = self.context.firewall.checkpoint()
             plan.add(
-                "Would remove: FluxGate nftables table",
-                lambda: self.context.firewall.remove(),
+                "Would remove: WireGuard nftables NAT rule",
+                lambda: self.context.firewall.remove_nat(self.name),
                 lambda: self.context.firewall.restore(firewall_checkpoint),
             )
         if forwarding_managed:
             forwarding_checkpoint = self.context.forwarding.checkpoint()
             plan.add(
-                "Would remove: FluxGate forwarding persistence",
-                lambda: self.context.forwarding.remove(),
+                "Would release: WireGuard forwarding lease",
+                lambda: self.context.forwarding.release(self.name),
                 lambda: self.context.forwarding.restore(forwarding_checkpoint),
             )
         plan.add("Would update: FluxGate provider state", lambda: self._set_enabled_state(False))

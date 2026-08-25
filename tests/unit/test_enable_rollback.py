@@ -61,14 +61,14 @@ def test_fresh_enable_failure_rolls_back_every_completed_step(
     elif failure_step == "forwarding":
         monkeypatch.setattr(
             provider_context.forwarding,
-            "ensure",
-            lambda: (_ for _ in ()).throw(RuntimeError("forwarding failure")),
+            "acquire",
+            lambda owner: (_ for _ in ()).throw(RuntimeError("forwarding failure")),
         )
     elif failure_step == "firewall":
         monkeypatch.setattr(
             provider_context.firewall,
             "ensure_nat",
-            lambda source, outbound: (_ for _ in ()).throw(RuntimeError("firewall failure")),
+            lambda owner, source, outbound: (_ for _ in ()).throw(RuntimeError("firewall failure")),
         )
     elif failure_step == "service":
         monkeypatch.setattr(

@@ -14,15 +14,17 @@ from fluxgate.core.state import atomic_write
 
 
 class FirewallManager(Protocol):
-    def ensure_nat(self, source_cidr: str, outbound_interface: str | None) -> bool: ...
+    def ensure_nat(self, owner: str, source_cidr: str, outbound_interface: str | None) -> bool: ...
 
-    def configured(self, source_cidr: str, outbound_interface: str | None) -> bool: ...
+    def configured(self, owner: str, source_cidr: str, outbound_interface: str | None) -> bool: ...
 
     def checkpoint(self) -> object: ...
 
     def restore(self, checkpoint: object) -> None: ...
 
-    def managed(self) -> bool: ...
+    def managed(self, owner: str | None = None) -> bool: ...
+
+    def remove_nat(self, owner: str) -> bool: ...
 
     def remove(self) -> bool: ...
 
@@ -42,6 +44,15 @@ class NftablesFirewallManager:
     MARKER = "fluxgate-managed"
     FILE_HEADER = b"# Managed by FluxGate.\n"
     INTERFACE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+    OWNER = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+    RULE = re.compile(
+        r'^    ip saddr (?P<network>\S+)(?: oifname "(?P<interface>[A-Za-z0-9_.-]+)")? '
+        r'counter masquerade comment "fluxgate-managed:(?P<owner>[a-z][a-z0-9-]{0,31})"$'
+    )
+    LEGACY_RULE = re.compile(
+        r'^    ip saddr (?P<network>\S+)(?: oifname "(?P<interface>[A-Za-z0-9_.-]+)")? '
+        r'counter masquerade comment "fluxgate-managed"$'
+    )
 
     def __init__(self, runner: CommandRunner, config_path: Path, unit_path: Path) -> None:
         self.runner = runner
@@ -75,10 +86,43 @@ class NftablesFirewallManager:
             raise StateError("the initial NAT backend requires an IPv4 source network")
         return network
 
-    def _rules(self, source_cidr: str, outbound_interface: str | None) -> bytes:
-        network = self._validated_network(source_cidr)
+    def _validated_owner(self, owner: str) -> str:
+        if not self.OWNER.fullmatch(owner):
+            raise StateError(f"invalid firewall owner: {owner}")
+        return owner
+
+    def _validated_rule(
+        self, source_cidr: str, outbound_interface: str | None
+    ) -> tuple[str, str | None]:
+        network = str(self._validated_network(source_cidr))
         if outbound_interface is not None and not self.INTERFACE.fullmatch(outbound_interface):
             raise StateError("invalid firewall outbound interface")
+        return network, outbound_interface
+
+    def _rules(self, rules: dict[str, tuple[str, str | None]]) -> bytes:
+        rendered_rules: list[str] = []
+        for owner in sorted(rules):
+            self._validated_owner(owner)
+            network, outbound_interface = self._validated_rule(*rules[owner])
+            output = f' oifname "{outbound_interface}"' if outbound_interface else ""
+            rendered_rules.append(
+                f'    ip saddr {network}{output} counter masquerade comment "{self.MARKER}:{owner}"'
+            )
+        return (
+            self.FILE_HEADER
+            + (
+                "table inet fluxgate {\n"
+                f'  comment "{self.MARKER}"\n'
+                "  chain postrouting {\n"
+                "    type nat hook postrouting priority srcnat; policy accept;\n"
+                + ("\n".join(rendered_rules) + "\n" if rendered_rules else "")
+                + "  }\n"
+                "}\n"
+            ).encode()
+        )
+
+    def _legacy_rules(self, source_cidr: str, outbound_interface: str | None) -> bytes:
+        network, outbound_interface = self._validated_rule(source_cidr, outbound_interface)
         output = f' oifname "{outbound_interface}"' if outbound_interface else ""
         return (
             self.FILE_HEADER
@@ -93,6 +137,43 @@ class NftablesFirewallManager:
                 "}\n"
             ).encode()
         )
+
+    def _configured_rules(self) -> dict[str, tuple[str, str | None]]:
+        self._assert_owned_files()
+        if not self.config_path.exists():
+            return {}
+        if self.config_path.read_bytes() == self.FILE_HEADER:
+            return {}
+        try:
+            lines = self.config_path.read_text().splitlines()
+        except UnicodeDecodeError as error:
+            raise StateError(
+                f"invalid FluxGate firewall configuration: {self.config_path}"
+            ) from error
+        rules: dict[str, tuple[str, str | None]] = {}
+        legacy: tuple[str, str | None] | None = None
+        for line in lines:
+            match = self.RULE.fullmatch(line)
+            if match:
+                owner = match.group("owner")
+                if owner in rules:
+                    raise StateError(f"duplicate FluxGate firewall owner: {owner}")
+                rules[owner] = self._validated_rule(
+                    match.group("network"), match.group("interface")
+                )
+                continue
+            legacy_match = self.LEGACY_RULE.fullmatch(line)
+            if legacy_match:
+                legacy = self._validated_rule(
+                    legacy_match.group("network"), legacy_match.group("interface")
+                )
+        if legacy is not None:
+            if rules or self.config_path.read_bytes() != self._legacy_rules(*legacy):
+                raise StateError(f"invalid legacy FluxGate firewall file: {self.config_path}")
+            return {"wireguard": legacy}
+        if self.config_path.read_bytes() != self._rules(rules):
+            raise StateError(f"non-canonical FluxGate firewall file: {self.config_path}")
+        return rules
 
     def _unit(self) -> bytes:
         ownership_guard = (
@@ -136,18 +217,20 @@ class NftablesFirewallManager:
             == 0
         )
 
-    def configured(self, source_cidr: str, outbound_interface: str | None) -> bool:
-        self._assert_owned_files()
+    def configured(self, owner: str, source_cidr: str, outbound_interface: str | None) -> bool:
+        owner = self._validated_owner(owner)
+        expected = self._validated_rule(source_cidr, outbound_interface)
+        rules = self._configured_rules()
         files_match = (
             self.config_path.exists()
-            and self.config_path.read_bytes() == self._rules(source_cidr, outbound_interface)
+            and rules.get(owner) == expected
             and self.unit_path.exists()
             and self.unit_path.read_bytes() == self._unit()
         )
         if not files_match:
             return False
         live = self._live()
-        network = str(self._validated_network(source_cidr))
+        network, outbound_interface = expected
         return (
             self._owned_live(live)
             and network in live.stdout
@@ -157,7 +240,7 @@ class NftablesFirewallManager:
         )
 
     def _snapshot(self) -> FirewallCheckpoint:
-        self._assert_owned_files()
+        self._configured_rules()
         live = self._live()
         if live.returncode == 0 and not self._owned_live(live):
             raise StateError(f"refusing to modify unmanaged nftables table: inet {self.TABLE}")
@@ -172,7 +255,10 @@ class NftablesFirewallManager:
     def checkpoint(self) -> object:
         return self._snapshot()
 
-    def managed(self) -> bool:
+    def managed(self, owner: str | None = None) -> bool:
+        rules = self._configured_rules()
+        if owner is not None:
+            return self._validated_owner(owner) in rules
         checkpoint = self._snapshot()
         return (
             checkpoint.config is not None
@@ -214,13 +300,17 @@ class NftablesFirewallManager:
         elif checkpoint.live_rules is not None:
             self.runner.run(["nft", "-f", "-"], input_text=checkpoint.live_rules, mutate=True)
 
-    def ensure_nat(self, source_cidr: str, outbound_interface: str | None) -> bool:
-        if self.configured(source_cidr, outbound_interface):
+    def ensure_nat(self, owner: str, source_cidr: str, outbound_interface: str | None) -> bool:
+        owner = self._validated_owner(owner)
+        desired_rule = self._validated_rule(source_cidr, outbound_interface)
+        if self.configured(owner, source_cidr, outbound_interface):
             return False
         checkpoint = self._snapshot()
+        rules = self._configured_rules()
+        rules[owner] = desired_rule
         try:
             self._delete_owned_live()
-            atomic_write(self.config_path, self._rules(source_cidr, outbound_interface), 0o644)
+            atomic_write(self.config_path, self._rules(rules), 0o644)
             atomic_write(self.unit_path, self._unit(), 0o644)
             self.runner.run(["systemctl", "daemon-reload"], mutate=True)
             self.runner.run(["systemctl", "enable", self.UNIT], mutate=True)
@@ -231,6 +321,35 @@ class NftablesFirewallManager:
             except BaseException as rollback_error:
                 raise StateError(
                     f"firewall update failed: {error}; rollback failed: {rollback_error}"
+                ) from error
+            raise
+        return True
+
+    def remove_nat(self, owner: str) -> bool:
+        owner = self._validated_owner(owner)
+        rules = self._configured_rules()
+        if owner not in rules:
+            return False
+        checkpoint = self._snapshot()
+        del rules[owner]
+        try:
+            self.runner.run(["systemctl", "disable", "--now", self.UNIT], mutate=True)
+            self._delete_owned_live()
+            if rules:
+                atomic_write(self.config_path, self._rules(rules), 0o644)
+                atomic_write(self.unit_path, self._unit(), 0o644)
+                self.runner.run(["systemctl", "daemon-reload"], mutate=True)
+                self.runner.run(["systemctl", "enable", "--now", self.UNIT], mutate=True)
+            else:
+                self.config_path.unlink(missing_ok=True)
+                self.unit_path.unlink(missing_ok=True)
+                self.runner.run(["systemctl", "daemon-reload"], mutate=True)
+        except BaseException as error:
+            try:
+                self.restore(checkpoint)
+            except BaseException as rollback_error:
+                raise StateError(
+                    f"firewall rule removal failed: {error}; rollback failed: {rollback_error}"
                 ) from error
             raise
         return True

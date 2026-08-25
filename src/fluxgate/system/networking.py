@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from typing import Protocol
 
@@ -15,6 +16,8 @@ class NetworkInspector(Protocol):
     def conflicting_route(self, network: ipaddress.IPv4Network, interface: str) -> str | None: ...
 
     def udp_port_available(self, port: int) -> bool: ...
+
+    def udp_listener_present(self, port: int) -> bool: ...
 
 
 class LinuxNetworkInspector:
@@ -48,3 +51,10 @@ class LinuxNetworkInspector:
             except OSError:
                 return False
         return True
+
+    def udp_listener_present(self, port: int) -> bool:
+        result = self.runner.run(["ss", "-H", "-lun"], check=False)
+        if result.returncode != 0:
+            return False
+        endpoint = re.compile(rf"(?:^|[\s\]])[^\s]*:{port}(?:\s|$)")
+        return any(endpoint.search(line) for line in result.stdout.splitlines())

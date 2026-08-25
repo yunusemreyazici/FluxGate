@@ -1,6 +1,3 @@
-from fluxgate.providers.placeholder import PlaceholderProvider
+from fluxgate.providers.openvpn.provider import OpenVPNProvider
 
-
-class OpenVPNProvider(PlaceholderProvider):
-    name = "openvpn"
-    display_name = "OpenVPN"
+__all__ = ["OpenVPNProvider"]

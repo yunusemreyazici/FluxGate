@@ -3,6 +3,22 @@
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Production OpenVPN UDP provider with an owned CA, server/client certificates, CRL enforcement,
+  standalone client profiles, service health, rollback, and host collision checks.
+- Explicit provider-neutral client provisioning and unified per-provider export trees.
+- Shared forwarding leases and independently tagged nftables NAT rules for simultaneous providers.
+- Project URLs and future package-index distribution guidance.
+
+### Changed
+
+- `client add` now creates only the identity; `client enable CLIENT PROVIDER` explicitly provisions
+  credentials, and `client disable CLIENT PROVIDER` revokes only that provider.
+- State schema 1 remains unchanged because v0.1 already stored credentials by provider name.
+
 ## [0.1.1] - 2026-08-25
 
 ### Fixed

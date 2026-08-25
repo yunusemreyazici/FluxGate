@@ -3,6 +3,10 @@
 FluxGate is a modular multi-transport connectivity server manager. It provides one typed control
 plane and CLI for independently implemented VPN and tunnel engines.
 
+**Project links:** [Repository](https://github.com/yunusemreyazici/FluxGate) ·
+[Releases](https://github.com/yunusemreyazici/FluxGate/releases) ·
+[Security](https://github.com/yunusemreyazici/FluxGate/security/policy)
+
 FluxGate is **not** a VPN protocol, is not dependent on 3x-ui, and is not a bundle of unrelated
 installation shell scripts. Protocol profiles and core implementations are deliberately separate:
 for example, a future VLESS profile can be supplied by sing-box or Xray-core without becoming a
@@ -10,13 +14,13 @@ new FluxGate daemon.
 
 ## Status
 
-FluxGate v0.1.1 is an early-stage release.
+FluxGate v0.1.1 is the latest stable early-stage release. The main branch is currently developing
+0.2 from that baseline.
 
-**Supported now:** WireGuard.
+**Implemented on the 0.2 development branch:** WireGuard and OpenVPN UDP.
 
-**Planned:** OpenVPN, sing-box, Xray-core, AmneziaWG, and later integrations and features. The
-registered OpenVPN, sing-box, and Xray-core entries are visible placeholders that refuse enable
-operations; they are not functioning providers in v0.1.1.
+**Planned:** sing-box, Xray-core, AmneziaWG, and later integrations and features. The registered
+sing-box and Xray-core entries remain visible placeholders that refuse enable operations.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -27,6 +31,12 @@ real end-to-end WireGuard client connection were validated on an Ubuntu 24.04 VP
 compatibility was validated for the native Python floors relevant to Ubuntu 22.04 and Debian 12;
 this does not imply that the full privileged lifecycle was exercised on all three distributions.
 
+The 0.2 development implementation has also been validated on Ubuntu 24.04 with simultaneous
+WireGuard/OpenVPN operation and a real macOS OpenVPN client. That validation covered TLS and
+certificate authentication, assigned address, full-tunnel IPv4 egress, pushed DNS, native
+counters, service restart, provider-selective disable, reboot recovery, CRL revoke enforcement,
+and cleanup. It is development validation, not a 0.2 release claim.
+
 ## Architecture
 
 ```text
@@ -35,7 +45,7 @@ CLI (presentation only)
        ├── typed TOML configuration + atomic JSON state
        ├── provider registry + capability declarations
        │    ├── WireGuard (implemented)
-       │    ├── OpenVPN (planned)
+       │    ├── OpenVPN UDP (implemented)
        │    ├── sing-box (planned)
        │    └── Xray-core (planned)
        └── injected host boundaries
@@ -48,7 +58,8 @@ CLI (presentation only)
 Providers own provider-specific system behavior. The CLI and client service use the registry and
 capabilities instead of switching on provider names. Operation plans support dry runs and
 best-effort reverse-order rollback. State and secrets use atomic replacement and restrictive file
-modes; FluxGate's nftables rules live in their own identifiable table.
+modes. FluxGate providers hold independent forwarding leases and tagged rules inside one owned
+nftables table, so WireGuard and OpenVPN can coexist safely.
 
 ## Installation
 
@@ -101,6 +112,11 @@ client_dns = ["1.1.1.1", "1.0.0.1"]
 
 [cores.openvpn]
 enabled = false
+interface = "fgovpn0"
+listen_port = 1194
+protocol = "udp"
+network = "10.78.0.0/24"
+client_dns = ["1.1.1.1", "1.0.0.1"]
 
 [cores.singbox]
 enabled = false
@@ -111,7 +127,8 @@ enabled = false
 
 Unknown fields and unsupported schema versions are rejected. `FLUXGATE_CONFIG_DIR`,
 `FLUXGATE_DATA_DIR`, `FLUXGATE_LOG_DIR`,
-`FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_SYSCTL_DIR`, `FLUXGATE_NFTABLES_DIR`, and
+`FLUXGATE_WIREGUARD_DIR`, `FLUXGATE_OPENVPN_DIR`, `FLUXGATE_SYSCTL_DIR`,
+`FLUXGATE_NFTABLES_DIR`, and
 `FLUXGATE_SYSTEMD_DIR` can override paths for isolated development and tests. Values must be
 absolute, traversal-free, and contain no whitespace or control characters.
 
@@ -125,11 +142,21 @@ fluxgate doctor
 fluxgate doctor --json
 fluxgate core list
 fluxgate core enable wireguard --dry-run
+fluxgate core enable openvpn --dry-run
 sudo fluxgate core enable wireguard
+sudo fluxgate core enable openvpn
 sudo fluxgate client add alice
+sudo fluxgate client enable alice wireguard
+sudo fluxgate client enable alice openvpn
+sudo fluxgate client export alice --output ./exports
+sudo fluxgate client disable alice openvpn
 fluxgate client show alice
 sudo fluxgate client revoke alice
 ```
+
+`client add` creates one provider-independent identity and does not provision every running core.
+`client enable` and `client disable` explicitly manage one provider. An export contains one
+subdirectory per provisioned provider and never prints credential material to the terminal.
 
 Dry-run lists planned mutation steps and does not write files, install packages, change services,
 or alter the firewall.
@@ -153,7 +180,9 @@ pytest
 
 Normal tests use temporary paths and fakes. Privileged Linux integration tests belong under the
 `integration` marker and are not part of the normal unit suite. See [Testing](docs/testing.md) for
-the v0.1.0 validation layers and full-tunnel test safety guidance.
+validation layers and full-tunnel test safety guidance. See [Packaging](docs/packaging.md) for the
+future package-index plan; the supported system installer remains the operational installation
+path.
 
 ## Roadmap
 

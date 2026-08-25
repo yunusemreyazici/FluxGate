@@ -73,6 +73,20 @@ class ExportArtifact(StrictModel):
     content: str
     secret: bool = True
 
+    @field_validator("name")
+    @classmethod
+    def safe_name(cls, value: str) -> str:
+        if (
+            not value
+            or len(value) > 128
+            or value in {".", ".."}
+            or "/" in value
+            or "\\" in value
+            or any(ord(character) < 32 for character in value)
+        ):
+            raise ValueError("export artifact name must be a safe filename")
+        return value
+
 
 class ClientArtifact(StrictModel):
     provider: str

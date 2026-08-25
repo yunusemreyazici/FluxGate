@@ -47,6 +47,51 @@ def test_config_validates_ports_interfaces_and_client_names() -> None:
         AppConfig.model_validate({"network": {"ipv4": "true"}})
 
 
+@pytest.mark.parametrize(
+    "openvpn",
+    [
+        {"protocol": "tcp"},
+        {"listen_port": 0},
+        {"network": "203.0.113.0/24"},
+        {"network": "10.78.0.0/30"},
+        {"client_dns": []},
+        {"client_dns": ["not-an-ip"]},
+        {"unexpected": True},
+    ],
+)
+def test_openvpn_config_rejects_unsupported_or_unsafe_values(openvpn: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"cores": {"openvpn": openvpn}})
+
+
+def test_provider_network_interface_and_udp_port_collisions_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="networks must not overlap"):
+        AppConfig.model_validate({"cores": {"openvpn": {"network": "10.77.0.0/24"}}})
+    with pytest.raises(ValidationError, match="interface names must differ"):
+        AppConfig.model_validate({"cores": {"openvpn": {"interface": "fg0"}}})
+    with pytest.raises(ValidationError, match="listen ports must differ"):
+        AppConfig.model_validate({"cores": {"openvpn": {"listen_port": 51820}}})
+
+
+def test_openvpn_config_round_trips_through_toml(tmp_path: Path) -> None:
+    original = AppConfig.model_validate(
+        {
+            "cores": {
+                "openvpn": {
+                    "enabled": True,
+                    "interface": "ovpn-test",
+                    "listen_port": 21194,
+                    "network": "172.30.0.0/24",
+                    "client_dns": ["9.9.9.9"],
+                }
+            }
+        }
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(original.as_toml())
+    assert load_config(path) == original
+
+
 def test_paths_accept_only_absolute_traversal_free_overrides(tmp_path: Path) -> None:
     layout = PathLayout.from_environment({"FLUXGATE_CONFIG_DIR": str(tmp_path)})
     assert layout.config_file == tmp_path / "config.toml"
@@ -64,6 +109,40 @@ def test_state_round_trip_is_atomic_and_private(tmp_path: Path) -> None:
     assert (store.path.stat().st_mode & 0o777) == 0o600
     assert not list(store.path.parent.glob(f".{store.path.name}.*"))
     assert json.loads(store.path.read_text())["schema_version"] == 1
+
+
+def test_v01_multi_provider_state_shape_loads_without_migration_or_data_loss(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.json"
+    payload = {
+        "schema_version": 1,
+        "clients": [
+            {
+                "id": "12345678-1234-5678-1234-567812345678",
+                "name": "legacy-client",
+                "created_at": "2026-01-01T00:00:00Z",
+                "enabled": True,
+                "expires_at": None,
+                "metadata": {},
+                "provider_credentials": {
+                    "wireguard": {
+                        "public_key": "legacy-public",
+                        "address": "10.77.0.2/32",
+                    }
+                },
+            }
+        ],
+        "providers": {"wireguard": {"enabled": True}},
+    }
+    path.write_text(json.dumps(payload))
+    store = StateStore(path)
+    loaded = store.load()
+    assert loaded.clients[0].provider_credentials == payload["clients"][0]["provider_credentials"]
+    store.save(loaded)
+    assert store.load().clients[0].provider_credentials["wireguard"]["public_key"] == (
+        "legacy-public"
+    )
 
 
 def test_future_config_and_state_schema_versions_fail_closed(tmp_path: Path) -> None:

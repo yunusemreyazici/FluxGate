@@ -87,6 +87,26 @@ def test_dry_run_does_not_generate_keys_or_mutate_state(provider_context, monkey
     assert not provider_context.services.active
 
 
+def test_dry_run_does_not_probe_systemd_when_wireguard_tools_exist(
+    provider_context, monkeypatch
+) -> None:
+    provider_context.dry_run = True
+    provider_context.runner.dry_run = True
+    provider = WireGuardProvider(provider_context)
+    monkeypatch.setattr(provider, "detect", available)
+    monkeypatch.setattr(
+        provider_context.services,
+        "is_active",
+        lambda unit: (_ for _ in ()).throw(AssertionError("dry-run probed systemd")),
+    )
+    monkeypatch.setattr(
+        provider_context.services,
+        "is_enabled",
+        lambda unit: (_ for _ in ()).throw(AssertionError("dry-run probed systemd")),
+    )
+    assert provider.enable().changed
+
+
 def test_clients_get_unique_deterministic_addresses_and_configs(
     provider_context, monkeypatch
 ) -> None:
@@ -94,8 +114,10 @@ def test_clients_get_unique_deterministic_addresses_and_configs(
     monkeypatch.setattr(provider, "detect", available)
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
-    alice = service.add("alice")
-    bob = service.add("bob")
+    service.add("alice")
+    service.add("bob")
+    alice = service.enable_provider("alice", "wireguard")
+    bob = service.enable_provider("bob", "wireguard")
     assert alice.provider_credentials["wireguard"]["address"] == "10.77.0.2/32"
     assert bob.provider_credentials["wireguard"]["address"] == "10.77.0.3/32"
     server_config = provider.config_path.read_text()
@@ -117,7 +139,8 @@ def test_revoke_removes_peer_and_secret_files(provider_context, monkeypatch) -> 
     monkeypatch.setattr(provider, "detect", available)
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
-    alice = service.add("alice")
+    service.add("alice")
+    alice = service.enable_provider("alice", "wireguard")
     secret = provider_context.paths.secrets_dir / "clients" / f"{alice.id}.wireguard.key"
     assert secret.exists()
     service.revoke("alice")
@@ -134,6 +157,7 @@ def test_revoke_and_delete_hold_the_state_mutation_lock(provider_context, monkey
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
     service.add("alice")
+    service.enable_provider("alice", "wireguard")
     lock_entries = 0
     real_lock = provider_context.state.lock
 
@@ -156,6 +180,7 @@ def test_duplicate_client_does_not_allocate_another_peer(provider_context, monke
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
     service.add("alice")
+    service.enable_provider("alice", "wireguard")
     with pytest.raises(FluxGateError, match="already exists"):
         service.add("alice")
     assert provider.config_path.read_text().count("# Client alice") == 1
@@ -255,11 +280,13 @@ def test_client_mutations_refuse_configuration_replaced_after_enable(
     monkeypatch.setattr(provider, "detect", available)
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
-    alice = service.add("alice")
+    service.add("alice")
+    alice = service.enable_provider("alice", "wireguard")
     provider.config_path.write_text("[Interface]\nPrivateKey = user-owned\n")
 
+    service.add("bob")
     with pytest.raises(FluxGateError, match="managed WireGuard configuration is missing"):
-        service.add("bob")
+        service.enable_provider("bob", "wireguard")
     with pytest.raises(FluxGateError, match="managed WireGuard configuration is missing"):
         service.revoke(str(alice.id))
 
@@ -273,6 +300,7 @@ def test_missing_state_never_silently_drops_managed_peers(provider_context, monk
     provider.enable()
     service = ClientService(provider_context.state, ProviderRegistry([provider]))
     service.add("alice")
+    service.enable_provider("alice", "wireguard")
     peer_config = provider.config_path.read_bytes()
     provider_context.state.path.unlink()
     with pytest.raises(FluxGateError, match="state is missing"):
@@ -305,9 +333,10 @@ def test_client_state_save_failure_rolls_back_live_peer_and_secrets(
     def fail_save(state) -> None:
         raise StateError("injected state failure")
 
+    service.add("alice")
     monkeypatch.setattr(provider_context.state, "save", fail_save)
     with pytest.raises(StateError, match="injected state failure"):
-        service.add("alice")
+        service.enable_provider("alice", "wireguard")
     assert provider.config_path.read_bytes() == config_before
     assert not list(provider_context.paths.clients_dir.glob("*"))
     assert not list((provider_context.paths.secrets_dir / "clients").glob("*"))

@@ -1,9 +1,10 @@
+from multiprocessing import get_context
 from pathlib import Path
 
 import pytest
 
 from fluxgate.clients import ClientService
-from fluxgate.core.errors import FluxGateError, ProviderError, UnsupportedProviderError
+from fluxgate.core.errors import FluxGateError, ProviderError
 from fluxgate.core.models import (
     OperationResult,
     ProviderDetection,
@@ -33,6 +34,11 @@ class MinimalProvider(CoreProvider):
         return OperationResult(changed=False, message="ok")
 
 
+def add_client_in_process(state_path: str, name: str) -> None:
+    service = ClientService(StateStore(Path(state_path)), ProviderRegistry())
+    service.add(name)
+
+
 def test_registry_lookup_duplicate_and_unknown(provider_context) -> None:
     provider = MinimalProvider(provider_context)
     registry = ProviderRegistry([provider])
@@ -41,13 +47,16 @@ def test_registry_lookup_duplicate_and_unknown(provider_context) -> None:
         registry.register(provider)
     with pytest.raises(ProviderError, match="unknown core"):
         registry.get("missing")
+    provider.name = "../unsafe"
+    with pytest.raises(ProviderError, match="invalid provider name"):
+        ProviderRegistry([provider])
 
 
-def test_placeholder_explicitly_refuses_enable(provider_context) -> None:
+def test_openvpn_provider_registers_production_capabilities(provider_context) -> None:
     provider = OpenVPNProvider(provider_context)
-    assert provider.status().state == ProviderStateName.UNSUPPORTED
-    with pytest.raises(UnsupportedProviderError, match="not implemented"):
-        provider.enable()
+    registry = ProviderRegistry([provider])
+    assert registry.get("openvpn") is provider
+    assert provider.capabilities
 
 
 def test_client_service_prevents_duplicate_names(tmp_path: Path) -> None:
@@ -60,3 +69,19 @@ def test_client_service_prevents_duplicate_names(tmp_path: Path) -> None:
     deleted = service.delete("alice")
     assert deleted == first.id
     assert service.list() == []
+
+
+def test_concurrent_client_identity_creation_is_serialized(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    context = get_context("fork")
+    processes = [
+        context.Process(target=add_client_in_process, args=(str(state_path), f"client-{index}"))
+        for index in range(8)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+    clients = StateStore(state_path).load().clients
+    assert {client.name for client in clients} == {f"client-{index}" for index in range(8)}
