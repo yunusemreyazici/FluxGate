@@ -7,6 +7,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ### Safe Failover Execution Foundation
 
+- Added the first real library execution adapter for eligible VLESS/TCP/TLS and Trojan/TCP/TLS
+  candidates. It runs an owned sing-box child behind a unique authenticated loopback SOCKS5
+  listener without
+  changing system routes, DNS, providers, profiles, firewall, or forwarding.
+- Bound private runtime credentials to pinned signature-verified bootstrap artifacts and bound the
+  live sing-box remote to an independently authorized IP literal while preserving the original TLS
+  hostname/SNI. Arbitrary configs, Hysteria2, and tunnel-provider candidates remain unsupported.
+- Added private ephemeral configs, exact bootstrap-generation and sing-box 1.13.19 binary/config
+  validation, bounded port-race fallback, authenticated SOCKS5 verification, make-before-break
+  replacement, idempotency, OS advisory scope locking, exact-child teardown, and a parent-death
+  guardian that retains the lock through cleanup.
+- Added controlled fake-binary subprocess, cross-process, crash, cancellation, privacy, bootstrap
+  tampering, DNS destination-binding, symlink, port collision, and rollback regressions. No execute
+  CLI or automatic failover daemon is exposed.
+
 - Added deterministic secret-free execution plans that bind current/target connection candidates
   to authoritative inventory fingerprints and declare adapter, verification, rollback, strategy,
   preconditions, support, and unsupported reasons without performing mutation.
@@ -19,7 +34,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
   recovery cancellation deferral, and operator-visible quarantine reconciliation.
 - Added a deterministic stateful test adapter and failure, timeout, cancellation, concurrency,
   rollback, cleanup, stale-inventory, plan-integrity, schema-v2, and sentinel-secret regressions.
-  No production adapter or execute CLI is exposed; live connection switching remains deferred.
+  No execute CLI is exposed; system-wide live connection switching remains deferred.
 
 ### Active Pathfinder Foundation
 

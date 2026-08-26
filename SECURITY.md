@@ -106,12 +106,31 @@ before acknowledging it. Scope entries are released after normal execution inste
 Recovery phases defer caller cancellation and remain bounded by both phase-specific timeouts and a
 conservative total transaction budget.
 
-No production adapter or execute command exists yet. Therefore this foundation cannot switch a
-live connection and does not claim automatic failover. Plans and results are ephemeral and do not
-enter `FluxGateState`, signed manifests, logs, or telemetry. In-process rollback cannot survive
-`SIGKILL` or host failure. A future real adapter must provide safe credential access, child-resource
-ownership, cooperative bounded cancellation, explicit health verification, and an appropriate
-cross-process runtime lock before operator-facing execution is enabled.
+The library-level `SingBoxLocalProxyAdapter` is the first real adapter, but no execute command or
+automatic failover surface exists. It accepts only a pinned, signature-verified bootstrap whose
+exact digest is independently supplied, bound to the expected server, client, profile, manifest
+generation, candidate, and artifact digest. It
+derives a private ephemeral config rather than accepting arbitrary operator JSON. The remote
+sing-box `server` is an independently authorized IP literal, while `tls.server_name` remains the
+original authorized hostname, so live DNS cannot expand the remote destination set or weaken
+certificate verification. VLESS/TCP/TLS and Trojan/TCP/TLS are supported; Hysteria2 and all tunnel
+providers remain unsupported.
+
+The adapter binds only a unique, random-credential-protected `127.0.0.1` SOCKS5 listener, never
+routes or DNS, and verifies the owned process plus authenticated SOCKS5 exchange—not end-to-end
+traffic. Private configs are mode 0600 inside owned mode-0700 runtime directories, process output
+is discarded, and public results never contain child errors or credentials. The exact supported
+sing-box 1.13.19 executable must be a safe regular single-link file below non-writable ancestors;
+the executable identity and runtime-config digest are rechecked across validation and activation.
+An advisory OS lock serializes the runtime scope across
+processes. A parent-death guardian inherits that lock and stops the exact child before releasing
+it, preventing a crashed owner from opening an overlap window. The sing-box child also inherits
+the lock, so an isolated guardian crash fails closed; the owning adapter terminates the exact
+dedicated process group on close or before replacement. Normal callers must use the async
+adapter lifetime and close it; `SIGKILL` cannot preserve transaction rollback, but the guardian
+tears down the already-started child and the next owner reconciles its private stale directory.
+Plans and results remain ephemeral and do not enter `FluxGateState`, signed manifests, logs, or
+telemetry.
 An async adapter that blocks the event-loop thread or permanently ignores task cancellation can
 still delay event-loop/process shutdown; such behavior violates the adapter contract and cannot be
 made safe by in-process quarantine alone.

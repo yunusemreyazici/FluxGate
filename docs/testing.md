@@ -158,8 +158,8 @@ QUIC candidates remain unverified until a safe provider/profile-specific probe e
 failover test layer validates decisions only and never changes routes, DNS, provider state, or
 client networking.
 
-The safe failover execution foundation is tested separately with a deterministic stateful adapter;
-no production network adapter is registered. Tests cover deterministic no-op/ready/unsupported
+The safe failover execution foundation is tested separately with a deterministic stateful adapter.
+Tests cover deterministic no-op/ready/unsupported
 plans, authoritative target and rollback-candidate rebinding, changed fingerprints, duplicate and
 missing targets, plan tampering, mandatory verification, every lifecycle failure, rollback and
 cleanup failure, bounded phase timeouts, explicit/task cancellation, already-converged idempotency,
@@ -168,14 +168,23 @@ Static import regression coverage prevents the execution layer from acquiring se
 profile, nftables, or forwarding lifecycle dependencies. The adapter test performs the actual
 transaction calls rather than mocking the executor.
 
-The default execution lock is intentionally process-local because there is no real adapter or CLI
-execution surface. Cancellation-cooperative adapter tasks are fully drained in tests. An adapter
+The default framework registry remains process-local. The local sing-box adapter adds a private
+runtime-root advisory lock held across processes and inherited by both the parent-death guardian
+and its child, plus an exact owned process group for isolated-guardian-crash recovery.
+Controlled real-subprocess fixtures cover exact binary-version/config validation, authenticated
+loopback-only SOCKS startup and handshake, malformed responses, delayed and absent listeners,
+bounded port collision/exhaustion fallback, exact bootstrap-generation and VLESS/Trojan binding,
+concrete remote address pins with preserved TLS SNI, private file modes, credential-like child
+output, already-converged reuse and invalidation, make-before-break replacement/rollback, forced
+exact-child stop, cancellation including subprocess-spawn cancellation, cross-process exclusion,
+symlink/hard-link/writable-ancestor refusal, and owner-SIGKILL cleanup. The local sing-box 1.13.19
+parser also checks VLESS and Trojan runtime configs with IPv4 and IPv6 pinned destinations. No
+public internet or VPS is required. Cancellation-cooperative adapter tasks are fully drained in tests. An adapter
 that violates cancellation is tracked within a bounded global capacity and its scope is
 operator-visible until late work stops and explicit runtime reconciliation is acknowledged. Tests
 cover cross-executor quarantine propagation, concurrent violation capacity, bounded lock lifetime,
 rollback/cleanup cancellation deferral, and late completion around the timeout cancellation grace.
-Real adapter acceptance will also require a host/runtime lock and child-process teardown
-integration. Ephemeral rollback is not claimed to survive process or host termination, and an
+Ephemeral transaction rollback is not claimed to survive process or host termination, and an
 adapter that blocks the event loop or ignores cancellation forever can delay process shutdown.
 
 Local AWG tests cover typed parameter bounds and deferred-field rejection, deterministic preset

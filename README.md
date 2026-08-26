@@ -32,8 +32,9 @@ Hysteria2.
 
 FluxGate v0.4.0 includes Secure Client Bootstrap and the offline Pathfinder compatibility
 foundation. The v0.5 development tree adds authorized bounded probing, observation-based
-scoring/ranking, selection, and a non-mutating failover decision policy. Continuous monitoring,
-automatic live route/DNS/VPN switching, remote enrollment and manifest retrieval,
+scoring/ranking, selection, a non-mutating failover decision policy, and a library-level local
+sing-box SOCKS execution adapter for eligible VLESS/TCP/TLS and Trojan/TCP/TLS candidates.
+Continuous monitoring, automatic live route/DNS/VPN switching, remote enrollment and manifest retrieval,
 anti-replay/freshness policy, signing-key rotation, Xray-core, TUIC, WebSocket/HTTP/2/gRPC,
 Reality, and GUI/mobile applications remain deferred.
 
@@ -284,14 +285,16 @@ quarantined scopes remain operator-visible until late work has stopped and the r
 explicitly reconciled. Rollback and cleanup ignore later cancellation requests but remain subject
 to their phase and total-transaction deadlines.
 
-No real connection adapter is registered in this development foundation. In particular, FluxGate
-does not yet launch a sing-box client, switch WireGuard/OpenVPN/AmneziaWG tunnels, alter routes or
-DNS, or expose a `pathfinder execute` command. Exported client artifacts alone do not provide the
-process ownership, health confirmation, locking, and teardown guarantees required for a safe live
-adapter. The framework and its results remain ephemeral; rollback is guaranteed only while the
-executor process is alive, not after `SIGKILL` or host failure. Its default lock registry is
-process-local, so any future operator-facing real adapter must add the appropriate host/runtime
-lock before it can be exposed safely.
+The first real library adapter can start an exact-bootstrap-generation-bound VLESS/TCP/TLS or
+Trojan/TCP/TLS sing-box client as a child runtime exposing a unique authenticated `127.0.0.1`
+SOCKS5 listener. It derives a mode-0600 private config, gives sing-box an independently authorized
+concrete remote IP while preserving the original TLS hostname/SNI, validates the exact supported
+sing-box 1.13.19 binary from a safe non-writable path and validates the exact config bytes before
+activation, owns teardown through a parent-death guardian, and holds an OS advisory lock for the
+runtime scope. Verification proves the owned child and authenticated local SOCKS5 exchange only;
+it does not prove end-to-end remote traffic. The adapter is library-level and must be used as an
+async context so normal exit closes the active proxy. There is no execute CLI, daemon, route/DNS
+change, or WireGuard/OpenVPN/AmneziaWG/Hysteria2 execution support.
 
 Hostname DNS results are intersected with the independently authorized address pins and candidate
 IP families before any socket is created. Resolver answers outside that set produce the typed
@@ -483,9 +486,10 @@ path.
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
 - **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
-- **0.5:** AmneziaWG 3.1, resilience profiles, the Active Pathfinder decision foundation, and the
-  framework-only safe failover execution boundary (development; no real connection adapters)
-- **Later:** continuous Pathfinder monitoring and real explicit live-switch adapters, remote
+- **0.5:** AmneziaWG 3.1, resilience profiles, the Active Pathfinder decision foundation, the
+  safe failover execution boundary, and a library-level local sing-box SOCKS adapter for eligible
+  VLESS/Trojan TCP/TLS candidates (development)
+- **Later:** continuous Pathfinder monitoring and additional explicit live-switch adapters, remote
   enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,
   CDN/fronting, censorship detection, GUI/mobile clients, optional 3x-ui integration, and

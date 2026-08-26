@@ -50,6 +50,8 @@ def main() -> None:
             "fluxgate/pathfinder/execution.py",
             "fluxgate/pathfinder/execution_models.py",
             "fluxgate/pathfinder/execution_planning.py",
+            "fluxgate/pathfinder/singbox_adapter.py",
+            "fluxgate/pathfinder/_singbox_guardian.py",
             "fluxgate/pathfinder/probing.py",
             "fluxgate/pathfinder/scoring.py",
             "fluxgate/pathfinder/selection.py",
@@ -79,6 +81,9 @@ def main() -> None:
         assert any(name.endswith("/src/fluxgate/cli/app.py") for name in sdist_names)
         assert any(name.endswith("/tests/unit/test_openvpn.py") for name in sdist_names)
         assert any(name.endswith("/tests/unit/test_profiles_singbox.py") for name in sdist_names)
+        assert any(
+            name.endswith("/tests/unit/test_pathfinder_singbox_adapter.py") for name in sdist_names
+        )
 
     print(f"Validated {wheels[0].name} and {sdists[0].name}")
 
