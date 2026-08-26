@@ -19,19 +19,23 @@ FluxGate v0.4.0 is the latest stable early-stage release.
 
 **Supported cores/providers:** WireGuard, OpenVPN UDP, and sing-box.
 
-**v0.5 development:** a first-class AmneziaWG 3.1 provider and immutable resilience-profile
-foundation are under development. The supported production design uses the official userspace
-backend; this work is not part of the stable v0.4.0 release.
+**v0.5 development:** a first-class AmneziaWG 3.1 provider, immutable resilience-profile
+foundation, and the Active Pathfinder decision foundation are under development. The supported
+AmneziaWG production design uses the official userspace backend. This work is not part of the
+stable v0.4.0 release.
 
 **Supported sing-box profiles:** VLESS/TCP/TLS, Trojan/TCP/TLS, and
 Hysteria2/QUIC/TLS.
 
-**Pathfinder compatibility candidates:** WireGuard, OpenVPN, VLESS, Trojan, and Hysteria2.
+**Pathfinder compatibility candidates:** WireGuard, AmneziaWG, OpenVPN, VLESS, Trojan, and
+Hysteria2.
 
 FluxGate v0.4.0 includes Secure Client Bootstrap and the offline Pathfinder compatibility
-foundation. Active probing, scoring/ranking, automatic selection/failover, remote enrollment and
-manifest retrieval, anti-replay/freshness policy, signing-key rotation, Xray-core, TUIC,
-WebSocket/HTTP/2/gRPC, Reality, and GUI/mobile applications remain deferred.
+foundation. The v0.5 development tree adds authorized bounded probing, observation-based
+scoring/ranking, selection, and a non-mutating failover decision policy. Continuous monitoring,
+automatic live route/DNS/VPN switching, remote enrollment and manifest retrieval,
+anti-replay/freshness policy, signing-key rotation, Xray-core, TUIC, WebSocket/HTTP/2/gRPC,
+Reality, and GUI/mobile applications remain deferred.
 
 Supported server operating systems are Ubuntu 22.04, Ubuntu 24.04, and Debian 12. Python 3.10 or
 newer is required, allowing FluxGate to use each supported distribution's native Python. Host
@@ -68,7 +72,10 @@ FluxGate Server
 └── Signed Capability Manifest
     └── Secure Client Bootstrap
         └── Pathfinder Compatibility
-            └── Future Active Pathfinder (not implemented)
+            └── Active Pathfinder (v0.5 development)
+                ├── Authorized bounded probes
+                ├── Explainable scoring + selection
+                └── Non-mutating failover decisions
 ```
 
 ```text
@@ -201,6 +208,83 @@ metadata plus client capabilities and returns compatible/incompatible candidates
 rejection reasons. It performs no reachability or DNS/socket probing, latency, packet-loss or
 reconnect measurement, performance scoring, ranking, automatic selection, fallback/failover, or
 censorship detection.
+
+## Active Pathfinder foundation (v0.5 development)
+
+Active Pathfinder builds on the unchanged pure compatibility engine. It accepts only candidates
+from authoritative local FluxGate config/state or an exact-byte signature-verified manifest bound
+to separately pinned server trust and independently supplied expected server hostname/IP and
+address pins. Every enabled candidate endpoint must equal that authorized server identity,
+candidate inventory and address pins are bounded, and transport/IP-family metadata must be
+internally consistent, so the subsystem exposes no arbitrary host-list or CIDR scanning interface.
+
+Probe plans are derived from typed candidate capabilities rather than protocol-name branches:
+
+- TCP candidates receive DNS and bounded TCP-connect probes.
+- TCP+TLS candidates additionally receive a verified TLS handshake using system trust or an
+  explicitly supplied CA bundle.
+- UDP/QUIC candidates receive DNS observation only. They remain `unverified`; creating or sending
+  on a UDP socket is not treated as application success.
+- Incompatible candidates are retained with their compatibility rejection reasons and are not
+  probed.
+
+Probe observations are ephemeral and secret-free. Deterministic scoring exposes each point or
+penalty component for compatibility, proven DNS/TCP/TLS results, latency, typed failures, and
+retries. Selection preserves the full stable ranking and represents the no-verified-candidate case
+explicitly. Failover consumes a report plus current runtime context and returns only `stay`,
+`switch`, `no_verified_candidate`, or `no_viable_candidate`; the first distinguishes compatible
+but unverified UDP/QUIC candidates from failed/incompatible inventory. Failure threshold, minimum
+score improvement, and cooldown provide hysteresis. It never changes routes, DNS, provider state,
+or client networking.
+
+Active `probe` performs network I/O and is deliberately not called a dry run. The `rank`, `select`,
+and `failover` commands consume a saved ephemeral report and perform no network or host mutation:
+
+```bash
+fluxgate pathfinder probe --manifest ./signed-manifest/manifest.json \
+  --signature ./signed-manifest/manifest.sig --trust ./pinned/trust.json \
+  --expected-server vpn.example.test \
+  --expected-address 192.0.2.10 \
+  --capabilities examples/capabilities/desktop-full.json --json > active-report.json
+fluxgate pathfinder rank --report active-report.json
+fluxgate pathfinder select --report active-report.json --json
+fluxgate pathfinder failover --report active-report.json --current 'profile:<profile-id>' \
+  --consecutive-failures 2 --seconds-since-switch 60 --json
+```
+
+On the managed server, `sudo fluxgate pathfinder probe --local ...` uses its authoritative local
+inventory and the bounded `authorized_server_addresses` list in `[pathfinder.probe]`. A hostname
+with TCP/TLS candidates needs at least one independently established IPv4/IPv6 address pin; a
+literal-IP server authorizes only that literal automatically. Use `--tls-ca` when a TLS candidate
+is anchored by a private CA not present in system trust. A successful generic TCP or TLS probe
+proves only the recorded transport/TLS property; it does not prove protocol authentication, VPN
+health, censorship resistance, or end-to-end traffic.
+WireGuard, AmneziaWG, OpenVPN/UDP, and Hysteria2 remain rankable diagnostics but cannot be selected
+until a safe probe produces verified evidence. An inventory containing only those candidates yields
+`no_verified_candidate`, not a claim that the compatible transports are broken.
+
+Hostname DNS results are intersected with the independently authorized address pins and candidate
+IP families before any socket is created. Resolver answers outside that set produce the typed
+`destination_unauthorized` outcome and are never connected. Multiple IPv4/IPv6 pins are canonical,
+duplicate-free, bounded to 16, and attempted in deterministic numeric order. Private, loopback, and
+other special-use addresses remain usable when explicitly pinned; no public/private heuristic is
+used. The executor passes only the chosen numeric sockaddr to `connect()`, so there is no second
+hostname resolution or DNS-rebinding window. TLS continues to authenticate and send SNI for the
+original authorized hostname; literal endpoints use IP SAN verification. This does not make DNS
+authenticated—it makes an untrusted answer unable to redirect a TCP probe beyond the authorized
+set. Platform resolution remains isolated behind a 32-operation global bound. A timed-out libc
+resolver call cannot be force-cancelled by Python; its daemon worker may remain until the OS
+resolver returns, capacity then fails closed, and such workers do not delay process exit.
+
+```toml
+[pathfinder.probe]
+authorized_server_addresses = ["192.0.2.10", "2001:db8::10"]
+```
+
+Reports have no credentials and are written only when the operator redirects JSON output. Report
+commands validate schema/invariants and recompute default scores from observations, but reports are
+not signed and carry no freshness guarantee. Treat an operator-saved report as an untrusted,
+point-in-time diagnostic input rather than durable telemetry.
 
 ## Installation
 
@@ -337,6 +421,8 @@ migrated losslessly in memory and written atomically as schema 2 on the next mut
 sing-box TLS uses a private FluxGate CA and a SAN-bearing, versioned server identity. Standalone
 client JSON embeds the trust root and never uses `insecure=true`. Exported proxy JSON contains
 bearer credentials and must be protected like a VPN private key.
+Active Pathfinder reports remain in memory or operator-selected output files and do not change the
+persistent state schema; state remains schema 2.
 Subprocesses use argument arrays without `shell=True`, have timeouts, and redact secret-like
 options in logs. See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
@@ -366,8 +452,10 @@ path.
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
 - **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
-- **0.5:** AmneziaWG 3.1 and resilience profiles (development)
-- **Later:** active Pathfinder probing/scoring/failover, remote enrollment and manifests,
+- **0.5:** AmneziaWG 3.1, resilience profiles, and the Active Pathfinder decision foundation
+  (development)
+- **Later:** continuous Pathfinder monitoring and explicit live-switch execution, remote
+  enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,
   CDN/fronting, censorship detection, GUI/mobile clients, optional 3x-ui integration, and
   multi-node management

@@ -38,9 +38,50 @@ pairing, the trust chain, validity, constraints, SAN identity, and restrictive p
 DNS identities use OpenSSL hostname verification and literal IP identities use OpenSSL IP
 verification. Standalone client configurations never set `insecure=true`.
 
-WireGuard, OpenVPN UDP, and sing-box are supported in v0.4.0. Xray-core, TUIC, additional
-transports, Reality, active Pathfinder probing, web management, and other roadmap integrations
-remain unsupported.
+WireGuard, OpenVPN UDP, and sing-box are supported in v0.4.0. The v0.5 development tree includes
+the bounded Active Pathfinder decision foundation described below. Xray-core, TUIC, additional
+transports, Reality, automatic live failover, web management, and other roadmap integrations remain
+unsupported.
+
+## v0.5 Active Pathfinder security model (development)
+
+Active Pathfinder is not a general scanner. Probe targets originate only from authoritative local
+FluxGate config/state or an exact-byte signature-verified manifest bound to separately pinned
+server trust and independently supplied expected server hostname/IP and address pins. Central
+authorization requires every enabled candidate endpoint to match that server identity, validates
+host/IP syntax, ports, closed capability shapes, transport/IP-family consistency, duplicate IDs, a
+64-candidate inventory bound, and a 16-address pin bound, and exposes no CIDR or arbitrary
+target-list input. Incompatible and disabled candidates are not probed.
+
+For an authorized hostname, platform resolver results are filtered to the candidate's declared IP
+families and intersected with a canonical independently authorized IPv4/IPv6 address set before any
+socket is created. An answer outside the set returns `destination_unauthorized`; it is never passed
+to `connect()`. The chosen numeric sockaddr retains the candidate-authorized port and is connected
+directly, so no socket helper performs a second hostname resolution. Private and other special-use
+addresses are not categorically rejected because explicitly pinned private FluxGate servers are
+supported. TLS verifies the original authorized hostname and uses it for SNI even though transport
+connects to a pinned numeric address. A literal endpoint authorizes only itself and retains IP SAN
+verification. This boundary does not authenticate DNS; it prevents untrusted DNS from expanding
+the independently authorized destination set.
+
+Active probes perform explicit network I/O with bounded concurrency, retries, connect timeouts, and
+per-candidate budgets. DNS, TCP connectivity, and verified TLS identity are distinct observations.
+UDP/QUIC DNS resolution remains unverified because socket creation or a generic datagram does not
+prove reachability or application authentication. A positive TCP/TLS result must not be interpreted
+as successful VPN/profile authentication or end-to-end connectivity.
+
+Python cannot cancel a platform `getaddrinfo` call after libc enters the resolver. FluxGate bounds
+these calls globally to 32 daemon workers: timed-out calls may remain only until the OS resolver
+returns, further resolution fails closed when capacity is exhausted, and resolver workers cannot
+delay process shutdown. Socket connect and TLS handshake phases use actual socket deadlines and
+explicit closure paths.
+
+Reports contain candidate identifiers, typed outcomes, measured timings, score components, and
+decision reasons—not credentials or serialized client/profile objects. Observations and failover
+context are ephemeral and do not enter signed public manifests or persistent state. Failover is a
+pure decision function and cannot alter routes, DNS, provider lifecycle, or client networking.
+Operator-redirected report files are unsigned point-in-time diagnostics without freshness or
+anti-replay guarantees; rank/select/failover validate and normalize them but do not persist them.
 
 ## v0.4 signing and bootstrap model
 

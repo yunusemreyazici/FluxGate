@@ -5,6 +5,25 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+### Active Pathfinder Foundation
+
+- Added a capability-driven active layer that preserves the pure offline compatibility engine and
+  separates authorized inventory, probe planning/execution, ephemeral observations, deterministic
+  scoring, stable selection, and failover policy.
+- Added bounded DNS, TCP-connect, and verified TLS-handshake probes with typed failure outcomes,
+  retry and candidate budgets, bounded parallelism, and conservative unverified semantics for
+  UDP/QUIC candidates without a safe generic application probe.
+- Restricted active targets to authoritative local inventory or exact-byte signature-verified
+  manifests bound to pinned server trust plus independent expected-server and concrete-address
+  pins, with centralized endpoint/capability validation, bounded inventory/address sets and
+  resolution, pre-connect DNS-result intersection, and no arbitrary target-list or CIDR interface.
+- Added explainable score components, preserved alternatives, distinct no-verified/no-viable
+  selection states, and a pure failover decision using failure threshold, minimum improvement, and
+  cooldown without modifying routes, DNS, providers, or client networking.
+- Added `pathfinder probe`, `rank`, `select`, and `failover` operator commands with secret-free JSON
+  output, plus localhost TCP/TLS integration coverage and network-free scoring/selection/failover
+  tests. Probe observations remain ephemeral and persistent state remains schema 2.
+
 ### AmneziaWG 3.1 Foundation
 
 - Added a first-class AmneziaWG `CoreProvider` using the pinned official userspace backend, an

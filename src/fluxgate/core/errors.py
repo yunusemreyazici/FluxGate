@@ -21,6 +21,14 @@ class VerificationError(FluxGateError):
     """A signed artifact or bootstrap bundle failed verification."""
 
 
+class PathfinderError(FluxGateError):
+    """Pathfinder could not safely plan or evaluate candidates."""
+
+
+class PathfinderAuthorizationError(PathfinderError):
+    """An active probe target is outside the authorized candidate inventory."""
+
+
 class ProviderError(FluxGateError):
     """A provider operation failed."""
 

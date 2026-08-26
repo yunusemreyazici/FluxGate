@@ -16,6 +16,7 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 
 from fluxgate.core.errors import ConfigError
 from fluxgate.core.models import StrictModel
+from fluxgate.pathfinder.addressing import normalize_authorized_addresses
 
 
 class ServerConfig(StrictModel):
@@ -216,6 +217,38 @@ class SingBoxConfig(StrictModel):
     binary_source: Literal["managed", "system"] = "managed"
 
 
+class PathfinderProbeConfig(StrictModel):
+    connect_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
+    candidate_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
+    max_parallel_probes: int = Field(default=4, ge=1, le=32)
+    retry_count: int = Field(default=0, ge=0, le=3)
+    authorized_server_addresses: tuple[str, ...] = ()
+
+    @field_validator("authorized_server_addresses", mode="before")
+    @classmethod
+    def authorized_address_pins(cls, value: object) -> object:
+        if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
+            return normalize_authorized_addresses(value)
+        return value
+
+    @model_validator(mode="after")
+    def connect_fits_candidate_budget(self) -> PathfinderProbeConfig:
+        if self.connect_timeout_seconds > self.candidate_timeout_seconds:
+            raise ValueError("Pathfinder connect timeout must not exceed candidate timeout")
+        return self
+
+
+class PathfinderFailoverConfig(StrictModel):
+    failure_threshold: int = Field(default=2, ge=1, le=20)
+    minimum_improvement: int = Field(default=25, ge=0, le=500)
+    cooldown_seconds: float = Field(default=30.0, ge=0.0, le=86400.0)
+
+
+class PathfinderConfig(StrictModel):
+    probe: PathfinderProbeConfig = Field(default_factory=PathfinderProbeConfig)
+    failover: PathfinderFailoverConfig = Field(default_factory=PathfinderFailoverConfig)
+
+
 class CoresConfig(StrictModel):
     wireguard: WireGuardConfig = Field(default_factory=WireGuardConfig)
     amneziawg: AmneziaWGConfig = Field(default_factory=AmneziaWGConfig)
@@ -229,6 +262,7 @@ class AppConfig(StrictModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     cores: CoresConfig = Field(default_factory=CoresConfig)
+    pathfinder: PathfinderConfig = Field(default_factory=PathfinderConfig)
 
     @model_validator(mode="after")
     def distinct_provider_networks(self) -> AppConfig:
@@ -268,6 +302,8 @@ class AppConfig(StrictModel):
         wg = self.cores.wireguard
         awg = self.cores.amneziawg
         openvpn = self.cores.openvpn
+        probe = self.pathfinder.probe
+        failover = self.pathfinder.failover
         outbound = (
             f'outbound_interface = "{self.network.outbound_interface}"\n'
             if self.network.outbound_interface
@@ -276,6 +312,7 @@ class AppConfig(StrictModel):
         dns = ", ".join(f'"{item}"' for item in wg.client_dns)
         awg_dns = ", ".join(f'"{item}"' for item in awg.client_dns)
         openvpn_dns = ", ".join(f'"{item}"' for item in openvpn.client_dns)
+        authorized_addresses = ", ".join(f'"{item}"' for item in probe.authorized_server_addresses)
         return (
             "schema_version = 1\n\n"
             "[server]\n"
@@ -284,6 +321,16 @@ class AppConfig(StrictModel):
             f"ipv4 = {str(self.network.ipv4).lower()}\n"
             f"ipv6 = {str(self.network.ipv6).lower()}\n"
             f"{outbound}\n"
+            "[pathfinder.probe]\n"
+            f"connect_timeout_seconds = {probe.connect_timeout_seconds}\n"
+            f"candidate_timeout_seconds = {probe.candidate_timeout_seconds}\n"
+            f"max_parallel_probes = {probe.max_parallel_probes}\n"
+            f"retry_count = {probe.retry_count}\n"
+            f"authorized_server_addresses = [{authorized_addresses}]\n\n"
+            "[pathfinder.failover]\n"
+            f"failure_threshold = {failover.failure_threshold}\n"
+            f"minimum_improvement = {failover.minimum_improvement}\n"
+            f"cooldown_seconds = {failover.cooldown_seconds}\n\n"
             "[cores.wireguard]\n"
             f"enabled = {str(wg.enabled).lower()}\n"
             f'interface = "{wg.interface}"\n'

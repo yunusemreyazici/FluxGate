@@ -130,6 +130,34 @@ network probe; all Mac and VPS temporary bundles were deleted afterward.
 
 ## v0.5 development validation
 
+Active Pathfinder unit tests cover trusted-local and signature-pinned target authorization,
+malformed endpoint and port rejection, capability-derived planning, explicit unsupported UDP
+semantics, all-UDP and mixed TCP/UDP inventory behavior, deterministic scoring and tie handling,
+preserved alternatives, no-verified/no-viable selection, failure threshold, improvement hysteresis,
+cooldown, report normalization/invariants, configuration bounds, and sentinel-secret-free human and
+structured CLI output. The executor is injectable, so orchestration, retry, scoring, selection, and
+failover policy tests require no network.
+
+Resolved-destination authorization regressions inject authorized, unauthorized, and mixed DNS
+answers for IPv4, IPv6, loopback, private, link-local, and metadata-service addresses. They prove
+that only independently pinned concrete addresses with the authorized family and port reach socket
+creation, that resolver ordering cannot change deterministic selection, and that hostname TLS uses
+the original DNS identity after connecting directly to the authorized numeric address. Signed CLI
+and local-config tests cover missing, malformed, duplicate, excessive, private, IPv4, and IPv6 pins.
+
+Isolated localhost integration fixtures cover TCP success/refusal/timeout and TLS success,
+hostname mismatch, untrusted certificates, and handshake timeout using a runtime-generated test CA.
+Literal-IP SAN verification and IPv6 TCP are also exercised. No test connects to a public
+third-party endpoint. Concurrency fixtures verify the configured worker bound with forty candidates,
+shared retry deadlines, a fast/slow mixture, and the 32-operation global resolver bound and recovery.
+Active reports are ephemeral and regression coverage confirms persistent state remains schema 2.
+
+The active foundation proves only its recorded generic observations. It does not establish
+application authentication for WireGuard, OpenVPN, VLESS, Trojan, Hysteria2, or AmneziaWG; UDP and
+QUIC candidates remain unverified until a safe provider/profile-specific probe exists. The
+failover test layer validates decisions only and never changes routes, DNS, provider state, or
+client networking.
+
 Local AWG tests cover typed parameter bounds and deferred-field rejection, deterministic preset
 resolution, matching server/client wire parameters, independent credentials and addresses,
 first/idempotent enable, disable/re-enable, owned service/config/binary paths, foreign-resource

@@ -42,9 +42,17 @@ def main() -> None:
             "fluxgate/manifest/service.py",
             "fluxgate/pathfinder/models.py",
             "fluxgate/pathfinder/service.py",
+            "fluxgate/pathfinder/active.py",
+            "fluxgate/pathfinder/active_models.py",
+            "fluxgate/pathfinder/addressing.py",
+            "fluxgate/pathfinder/authorization.py",
+            "fluxgate/pathfinder/failover.py",
+            "fluxgate/pathfinder/probing.py",
+            "fluxgate/pathfinder/scoring.py",
+            "fluxgate/pathfinder/selection.py",
             "fluxgate/cli/pathfinder.py",
         ):
-            assert required in wheel_names, f"0.4 module missing from wheel: {required}"
+            assert required in wheel_names, f"required module missing from wheel: {required}"
         assert not any(name.startswith("tests/") for name in wheel_names)
         metadata_name = next(name for name in wheel_names if name.endswith(".dist-info/METADATA"))
         entry_name = next(
