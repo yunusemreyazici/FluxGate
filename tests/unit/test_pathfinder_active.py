@@ -18,7 +18,13 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from pydantic import ValidationError
+from typer.main import get_command
 from typer.testing import CliRunner
+
+try:
+    from click.utils import strip_ansi
+except ImportError:
+    from typer._click.utils import strip_ansi
 
 import fluxgate.cli.pathfinder as pathfinder_cli
 from fluxgate.cli.app import app
@@ -1823,9 +1829,18 @@ def test_signed_cli_accepts_bounded_ipv4_ipv6_address_pins(
     )
     assert result.exit_code == 0, result.output
     assert captured == [("192.0.2.10", "2001:db8::1")]
-    help_result = CliRunner().invoke(app, ["pathfinder", "probe", "--help"])
+    root_command = get_command(app)
+    probe_command = root_command.commands["pathfinder"].commands["probe"]
+    expected_address = next(
+        parameter
+        for parameter in probe_command.params
+        if "--expected-address" in getattr(parameter, "opts", ())
+    )
+    assert expected_address.multiple
+
+    help_result = CliRunner().invoke(app, ["pathfinder", "probe", "--help"], color=True)
     assert help_result.exit_code == 0
-    assert "--expected-address" in help_result.output
+    assert "--expected-address" in strip_ansi(help_result.output)
 
 
 def test_signed_cli_literal_ip_endpoint_authorizes_only_itself(
