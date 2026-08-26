@@ -360,12 +360,19 @@ class SingBoxProvider(CoreProvider):
 
     def _publish_config(self, desired: FluxGateState, identity: TLSIdentity) -> bool:
         content = self._render(desired, identity)
-        self._validate(content)
         previous = self.config_path.read_bytes() if self.config_path.exists() else None
+        mode_converged = (
+            self.config_path.is_file()
+            and not self.config_path.is_symlink()
+            and stat.S_IMODE(self.config_path.stat().st_mode) == 0o600
+        )
+        if previous == content and mode_converged:
+            return False
+        self._validate(content)
         active = self.context.services.is_active(self.unit)
         atomic_write(self.config_path, content, 0o600)
         try:
-            if active:
+            if active and previous != content:
                 self.context.services.restart(self.unit)
                 if not self._wait_listeners(desired):
                     raise ProviderError("sing-box restart did not expose all expected listeners")
@@ -376,7 +383,121 @@ class SingBoxProvider(CoreProvider):
                 atomic_write(self.config_path, previous, 0o600)
                 self.context.services.restart(self.unit)
             raise
-        return previous != content
+        return True
+
+    def _profiles_converged(self, desired: FluxGateState, identity: TLSIdentity) -> bool:
+        try:
+            content = self._render(desired, identity)
+            return (
+                self.detect().available
+                and self.tls.valid(identity, self.context.config.server.domain)
+                and self._owned()
+                and self.config_path.is_file()
+                and not self.config_path.is_symlink()
+                and stat.S_IMODE(self.config_path.stat().st_mode) == 0o600
+                and self.config_path.read_bytes() == content
+                and self.unit_path.is_file()
+                and not self.unit_path.is_symlink()
+                and stat.S_IMODE(self.unit_path.stat().st_mode) == 0o644
+                and self.unit_path.read_bytes() == self._unit_content()
+                and self.context.services.is_enabled(self.unit)
+                and self.context.services.is_active(self.unit)
+                and self._listeners_healthy(desired)
+            )
+        except (OSError, ProviderError):
+            return False
+
+    @staticmethod
+    def _restore_file(path: Path, previous: bytes | None, mode: int) -> None:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write(path, previous, mode)
+
+    def _reconcile_profile_host(
+        self, desired: FluxGateState, identity: TLSIdentity
+    ) -> OperationResult:
+        content = self._render(desired, identity)
+        unit_content = self._unit_content()
+        previous_config = self.config_path.read_bytes() if self.config_path.exists() else None
+        previous_unit = self.unit_path.read_bytes() if self.unit_path.exists() else None
+        previous_config_mode = (
+            stat.S_IMODE(self.config_path.stat().st_mode) if self.config_path.exists() else 0o600
+        )
+        previous_unit_mode = (
+            stat.S_IMODE(self.unit_path.stat().st_mode) if self.unit_path.exists() else 0o644
+        )
+        service_active = self.context.services.is_active(self.unit)
+        service_enabled = self.context.services.is_enabled(self.unit)
+        listeners_healthy = service_active and self._listeners_healthy(desired)
+        config_content_changed = previous_config != content
+        config_needs_write = config_content_changed or previous_config_mode != 0o600
+        unit_content_changed = previous_unit != unit_content
+        unit_needs_write = unit_content_changed or previous_unit_mode != 0o644
+
+        self._validate(content)
+        config_written = False
+        unit_written = False
+        service_touched = False
+        actions: list[str] = []
+        try:
+            if config_needs_write:
+                atomic_write(self.config_path, content, 0o600)
+                config_written = True
+                actions.append(f"Converged {self.config_path}")
+            if unit_needs_write:
+                atomic_write(self.unit_path, unit_content, 0o644)
+                unit_written = True
+                actions.append(f"Converged {self.unit_path}")
+                if unit_content_changed:
+                    self.context.services.daemon_reload()
+                    actions.append("Reloaded systemd unit definitions")
+            if not service_active or not service_enabled:
+                self.context.services.enable_now(self.unit)
+                service_touched = True
+                actions.append(f"Enabled and started {self.unit}")
+            if service_active and (
+                config_content_changed or unit_content_changed or not listeners_healthy
+            ):
+                self.context.services.restart(self.unit)
+                service_touched = True
+                actions.append(f"Restarted {self.unit}")
+            if (
+                not self.context.services.is_active(self.unit)
+                or not self.context.services.is_enabled(self.unit)
+                or not self._wait_listeners(desired)
+            ):
+                raise ProviderError("sing-box reconciliation failed postcondition verification")
+        except BaseException as error:
+            rollback_failures: list[str] = []
+            try:
+                if config_written:
+                    self._restore_file(self.config_path, previous_config, previous_config_mode)
+                if unit_written:
+                    self._restore_file(self.unit_path, previous_unit, previous_unit_mode)
+                    if unit_content_changed:
+                        self.context.services.daemon_reload()
+            except BaseException as rollback_error:
+                rollback_failures.append(f"files: {rollback_error}")
+            try:
+                if service_active and (
+                    config_content_changed or unit_content_changed or service_touched
+                ):
+                    self.context.services.restart(self.unit)
+                self.context.services.restore(
+                    self.unit, enabled=service_enabled, active=service_active
+                )
+            except BaseException as rollback_error:
+                rollback_failures.append(f"service: {rollback_error}")
+            if rollback_failures:
+                raise FluxGateError(
+                    f"sing-box reconciliation failed: {error}; rollback failures: "
+                    + "; ".join(rollback_failures)
+                ) from error
+            raise
+        return OperationResult(
+            changed=True, message="sing-box profiles reconciled", actions=actions
+        )
 
     def enable(self) -> OperationResult:
         if self.context.dry_run:
@@ -524,9 +645,12 @@ class SingBoxProvider(CoreProvider):
         if not self._enabled_in_state():
             raise ProviderError("sing-box provider is not enabled")
         self._check_profile_conflicts(desired, inspect_live=not self.context.dry_run)
+        identity = self.tls._load_current()
+        if identity is not None and self._profiles_converged(desired, identity):
+            return OperationResult(changed=False, message="sing-box profiles already converged")
+        self._verify_binary()
         identity = self.tls.ensure(self.context.config.server.domain)
-        changed = self._publish_config(desired, identity)
-        return OperationResult(changed=changed, message="sing-box profiles reconciled")
+        return self._reconcile_profile_host(desired, identity)
 
     def validate_profile(self, profile: ProfileDefinition, state: FluxGateState) -> None:
         desired = state.model_copy(deep=True)

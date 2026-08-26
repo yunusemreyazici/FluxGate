@@ -630,6 +630,193 @@ def prepared_provider(provider_context, monkeypatch) -> tuple[SingBoxProvider, T
     return provider, identity
 
 
+def enabled_profile_stack(provider_context, monkeypatch):
+    provider, identity = prepared_provider(provider_context, monkeypatch)
+    provider.enable()
+    registry = ProviderRegistry([provider])
+    profiles = ProfileService(provider_context.state, registry)
+    created = [
+        profiles.create(
+            name=name,
+            provider="singbox",
+            protocol=protocol,
+            transport=transport,
+            security=SecurityName.TLS,
+            port=port,
+        )
+        for name, protocol, transport, port in (
+            ("vless-main", ProtocolName.VLESS, TransportName.TCP, 8443),
+            ("trojan-main", ProtocolName.TROJAN, TransportName.TCP, 9443),
+            ("hysteria2-main", ProtocolName.HYSTERIA2, TransportName.QUIC, 8444),
+        )
+    ]
+    for item in created:
+        profiles.set_enabled(item.name, True)
+    clients = ClientService(provider_context.state, registry)
+    clients.add("existing-client")
+    for item in created:
+        clients.enable_profile("existing-client", item.name)
+    return provider, identity, profiles, created
+
+
+@pytest.mark.parametrize("target", ["vless-main", "trojan-main", "hysteria2-main"])
+def test_already_enabled_profile_is_a_true_host_and_state_noop(
+    provider_context, monkeypatch, target: str
+) -> None:
+    provider, identity, profiles, created = enabled_profile_stack(provider_context, monkeypatch)
+    state_before = provider_context.state.load()
+    state_bytes_before = provider_context.state.path.read_bytes()
+    config_before = provider.config_path.read_bytes()
+    config_inode_before = provider.config_path.stat().st_ino
+    unit_before = provider.unit_path.read_bytes()
+    tls_before = {
+        path: (path.read_bytes(), path.stat().st_ino)
+        for path in (identity.ca_certificate, identity.certificate, identity.private_key)
+    }
+    credentials_before = state_before.clients[0].profile_credentials.copy()
+    ids_before = {item.name: item.id for item in state_before.profiles}
+    saves = 0
+    original_save = provider_context.state.save
+
+    def record_save(state: FluxGateState) -> None:
+        nonlocal saves
+        saves += 1
+        original_save(state)
+
+    monkeypatch.setattr(provider_context.state, "save", record_save)
+    monkeypatch.setattr(
+        ManagedTLSIdentityManager,
+        "ensure",
+        lambda self, host: (_ for _ in ()).throw(AssertionError("TLS identity rotated")),
+    )
+    provider_context.services.events.clear()
+
+    result = profiles.set_enabled(target, True)
+
+    state_after = provider_context.state.load()
+    assert result.changed is False and result.message == "Profile already converged"
+    assert saves == 0
+    assert provider_context.state.path.read_bytes() == state_bytes_before
+    assert state_after == state_before
+    assert {item.name: item.id for item in state_after.profiles} == ids_before
+    assert state_after.clients[0].profile_credentials == credentials_before
+    assert all(item.enabled for item in state_after.profiles)
+    assert {item.name for item in state_after.profiles if item.name != target} == {
+        item.name for item in created if item.name != target
+    }
+    assert provider.config_path.read_bytes() == config_before
+    assert provider.config_path.stat().st_ino == config_inode_before
+    assert provider.unit_path.read_bytes() == unit_before
+    assert {path: (path.read_bytes(), path.stat().st_ino) for path in tls_before} == tls_before
+    assert provider_context.services.events == []
+
+
+def test_profile_noop_repairs_config_unit_service_and_listener_drift(
+    provider_context, monkeypatch
+) -> None:
+    provider, _, profiles, _ = enabled_profile_stack(provider_context, monkeypatch)
+    converged_config = provider.config_path.read_bytes()
+    converged_unit = provider.unit_path.read_bytes()
+
+    provider.config_path.write_text("owned config drift")
+    provider.config_path.chmod(0o600)
+    provider_context.services.events.clear()
+    assert profiles.set_enabled("vless-main", True).changed
+    assert provider.config_path.read_bytes() == converged_config
+    assert provider_context.services.events.count(f"restart:{provider.unit}") == 1
+
+    provider.unit_path.write_text(provider.UNIT_HEADER + "owned unit drift\n")
+    provider.unit_path.chmod(0o644)
+    provider_context.services.events.clear()
+    assert profiles.set_enabled("trojan-main", True).changed
+    assert provider.unit_path.read_bytes() == converged_unit
+    assert provider_context.services.events.count("daemon-reload") == 1
+    assert provider_context.services.events.count(f"restart:{provider.unit}") == 1
+
+    provider_context.services.active_units.remove(provider.unit)
+    provider_context.services.events.clear()
+    assert profiles.set_enabled("hysteria2-main", True).changed
+    assert provider_context.services.is_active(provider.unit)
+    assert provider_context.services.events == [f"enable:{provider.unit}"]
+
+    checks = iter((False, False, True))
+    monkeypatch.setattr(provider, "_listeners_healthy", lambda state: next(checks))
+    provider_context.services.events.clear()
+    assert profiles.set_enabled("vless-main", True).changed
+    assert provider_context.services.events == [f"restart:{provider.unit}"]
+
+
+def test_disabled_profile_enable_updates_config_without_rotating_identity_or_credentials(
+    provider_context, monkeypatch
+) -> None:
+    provider, identity = prepared_provider(provider_context, monkeypatch)
+    provider.enable()
+    registry = ProviderRegistry([provider])
+    profiles = ProfileService(provider_context.state, registry)
+    clients = ClientService(provider_context.state, registry)
+    created = profiles.create(
+        name="new-trojan",
+        provider="singbox",
+        protocol=ProtocolName.TROJAN,
+        transport=TransportName.TCP,
+        security=SecurityName.TLS,
+        port=9443,
+    )
+    clients.add("existing-client")
+    config_before = provider.config_path.read_bytes()
+    tls_before = tuple(
+        path.read_bytes()
+        for path in (identity.ca_certificate, identity.certificate, identity.private_key)
+    )
+    provider_context.services.events.clear()
+
+    result = profiles.set_enabled(created.name, True)
+
+    persisted = profiles.find(created.name)
+    assert result.changed and persisted.enabled and persisted.id == created.id
+    assert provider.config_path.read_bytes() != config_before
+    rendered = json.loads(provider.config_path.read_bytes())
+    assert [(inbound["type"], inbound["listen_port"]) for inbound in rendered["inbounds"]] == [
+        ("trojan", 9443)
+    ]
+    assert provider_context.state.load().clients[0].profile_credentials == {}
+    assert (
+        tuple(
+            path.read_bytes()
+            for path in (identity.ca_certificate, identity.certificate, identity.private_key)
+        )
+        == tls_before
+    )
+    assert provider_context.services.events == [f"restart:{provider.unit}"]
+
+
+def test_profile_reconciliation_failure_restores_owned_config_service_and_state(
+    provider_context, monkeypatch
+) -> None:
+    provider, _, profiles, _ = enabled_profile_stack(provider_context, monkeypatch)
+    provider.config_path.write_text("owned config drift")
+    provider.config_path.chmod(0o600)
+    drifted = provider.config_path.read_bytes()
+    state_before = provider_context.state.path.read_bytes()
+    calls = 0
+
+    def fail_once(unit: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected restart failure")
+        provider_context.services._set_active(unit, True)
+
+    monkeypatch.setattr(provider_context.services, "restart", fail_once)
+    with pytest.raises(RuntimeError, match="injected restart failure"):
+        profiles.set_enabled("vless-main", True)
+    assert calls == 2
+    assert provider.config_path.read_bytes() == drifted
+    assert provider_context.state.path.read_bytes() == state_before
+    assert provider_context.services.is_active(provider.unit)
+    assert provider_context.services.is_enabled(provider.unit)
+
+
 def test_singbox_enable_repeat_drift_disable_and_shared_resource_independence(
     provider_context, monkeypatch
 ) -> None:

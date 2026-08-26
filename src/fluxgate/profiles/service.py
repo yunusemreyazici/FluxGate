@@ -91,7 +91,15 @@ class ProfileService:
             profile = self._find(current.profiles, identity)
             if profile.enabled == enabled:
                 if enabled and not dry_run:
-                    self.providers.get(profile.provider).reconcile_profiles(current)
+                    reconciliation = self.providers.get(profile.provider).reconcile_profiles(
+                        current
+                    )
+                    if reconciliation.changed:
+                        return OperationResult(
+                            changed=True,
+                            message=f"Profile host state reconciled: {profile.name}",
+                            actions=reconciliation.actions,
+                        )
                 return OperationResult(changed=False, message="Profile already converged")
             desired = current.model_copy(deep=True)
             changed = self._find(desired.profiles, identity)
