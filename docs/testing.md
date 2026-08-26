@@ -158,6 +158,26 @@ QUIC candidates remain unverified until a safe provider/profile-specific probe e
 failover test layer validates decisions only and never changes routes, DNS, provider state, or
 client networking.
 
+The safe failover execution foundation is tested separately with a deterministic stateful adapter;
+no production network adapter is registered. Tests cover deterministic no-op/ready/unsupported
+plans, authoritative target and rollback-candidate rebinding, changed fingerprints, duplicate and
+missing targets, plan tampering, mandatory verification, every lifecycle failure, rollback and
+cleanup failure, bounded phase timeouts, explicit/task cancellation, already-converged idempotency,
+same-scope exclusion, independent-scope progress, and secret-free result JSON/repr/error reasons.
+Static import regression coverage prevents the execution layer from acquiring server provider,
+profile, nftables, or forwarding lifecycle dependencies. The adapter test performs the actual
+transaction calls rather than mocking the executor.
+
+The default execution lock is intentionally process-local because there is no real adapter or CLI
+execution surface. Cancellation-cooperative adapter tasks are fully drained in tests. An adapter
+that violates cancellation is tracked within a bounded global capacity and its scope is
+operator-visible until late work stops and explicit runtime reconciliation is acknowledged. Tests
+cover cross-executor quarantine propagation, concurrent violation capacity, bounded lock lifetime,
+rollback/cleanup cancellation deferral, and late completion around the timeout cancellation grace.
+Real adapter acceptance will also require a host/runtime lock and child-process teardown
+integration. Ephemeral rollback is not claimed to survive process or host termination, and an
+adapter that blocks the event loop or ignores cancellation forever can delay process shutdown.
+
 Local AWG tests cover typed parameter bounds and deferred-field rejection, deterministic preset
 resolution, matching server/client wire parameters, independent credentials and addresses,
 first/idempotent enable, disable/re-enable, owned service/config/binary paths, foreign-resource

@@ -263,6 +263,36 @@ WireGuard, AmneziaWG, OpenVPN/UDP, and Hysteria2 remain rankable diagnostics but
 until a safe probe produces verified evidence. An inventory containing only those candidates yields
 `no_verified_candidate`, not a claim that the compatible transports are broken.
 
+### Safe failover execution foundation (v0.5 development)
+
+A failover decision is still not a live connection switch. FluxGate now has a separate, explicit
+client-execution foundation that can turn a typed decision into a deterministic, secret-free
+`FailoverExecutionPlan`. The plan identifies the current and target candidates, required adapter,
+preconditions, verification contract, rollback target, execution strategy, and whether execution
+is supported. Candidate fingerprints bind the full secret-free connection shape to the
+authoritative server identity and address authorization. The executor reloads that inventory under
+a client-runtime-scoped lock immediately before preparation and rejects missing, disabled,
+duplicate, changed, or tampered targets and rollback candidates.
+
+The adapter contract is deliberately not a `CoreProvider`: it models client connection
+`prepare -> activate -> verify -> commit`, with rollback and cleanup on failure. Explicit states,
+bounded phase timeouts, cancellation, already-converged detection, make-before-break capability,
+and prominent rollback/cleanup failures are covered by a deterministic adapter test suite. A
+cancellation-unsafe adapter quarantines its execution scope instead of allowing another switch to
+race its unfinished work. Active execution and quarantine capacity are process-wide and bounded;
+quarantined scopes remain operator-visible until late work has stopped and the runtime has been
+explicitly reconciled. Rollback and cleanup ignore later cancellation requests but remain subject
+to their phase and total-transaction deadlines.
+
+No real connection adapter is registered in this development foundation. In particular, FluxGate
+does not yet launch a sing-box client, switch WireGuard/OpenVPN/AmneziaWG tunnels, alter routes or
+DNS, or expose a `pathfinder execute` command. Exported client artifacts alone do not provide the
+process ownership, health confirmation, locking, and teardown guarantees required for a safe live
+adapter. The framework and its results remain ephemeral; rollback is guaranteed only while the
+executor process is alive, not after `SIGKILL` or host failure. Its default lock registry is
+process-local, so any future operator-facing real adapter must add the appropriate host/runtime
+lock before it can be exposed safely.
+
 Hostname DNS results are intersected with the independently authorized address pins and candidate
 IP families before any socket is created. Resolver answers outside that set produce the typed
 `destination_unauthorized` outcome and are never connected. Multiple IPv4/IPv6 pins are canonical,
@@ -422,7 +452,8 @@ sing-box TLS uses a private FluxGate CA and a SAN-bearing, versioned server iden
 client JSON embeds the trust root and never uses `insecure=true`. Exported proxy JSON contains
 bearer credentials and must be protected like a VPN private key.
 Active Pathfinder reports remain in memory or operator-selected output files and do not change the
-persistent state schema; state remains schema 2.
+persistent state schema. Failover execution plans/results likewise remain ephemeral and no runtime
+history or journal is added; persistent state remains schema 2.
 Subprocesses use argument arrays without `shell=True`, have timeouts, and redact secret-like
 options in logs. See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
 
@@ -436,7 +467,7 @@ old application at schema-2 state.
 ```bash
 ruff format --check .
 ruff check .
-mypy src
+mypy --strict src
 pytest
 ```
 
@@ -452,9 +483,9 @@ path.
 - **0.2:** OpenVPN and unified client exports
 - **0.3:** sing-box and protocol profiles (released)
 - **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
-- **0.5:** AmneziaWG 3.1, resilience profiles, and the Active Pathfinder decision foundation
-  (development)
-- **Later:** continuous Pathfinder monitoring and explicit live-switch execution, remote
+- **0.5:** AmneziaWG 3.1, resilience profiles, the Active Pathfinder decision foundation, and the
+  framework-only safe failover execution boundary (development; no real connection adapters)
+- **Later:** continuous Pathfinder monitoring and real explicit live-switch adapters, remote
   enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,
   CDN/fronting, censorship detection, GUI/mobile clients, optional 3x-ui integration, and

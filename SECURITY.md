@@ -83,6 +83,39 @@ pure decision function and cannot alter routes, DNS, provider lifecycle, or clie
 Operator-redirected report files are unsigned point-in-time diagnostics without freshness or
 anti-replay guarantees; rank/select/failover validate and normalize them but do not persist them.
 
+## v0.5 failover execution foundation security model (development)
+
+`FailoverDecision` remains pure and non-mutating. A separate planner can produce a schema-1,
+secret-free execution plan, but an unsigned Active Pathfinder report or serialized plan is never
+network authority. Immediately before adapter preparation, the executor reloads an authoritative
+candidate inventory and checks the target and any rollback candidate for presence, enabled state,
+unique identity, unchanged endpoint/port/capability shape, server identity, authorization source,
+and authorized concrete-address set. Those fields are bound by deterministic SHA-256 fingerprints;
+credentials are deliberately excluded. Plan integrity is also checked before the inventory rebind.
+
+The `ConnectionExecutionAdapter` boundary represents client runtime activity, not shared server
+provider/profile lifecycle. The execution modules do not import provider, profile, firewall, or
+forwarding managers. A failed prepare, activation, verification, or commit attempts bounded
+rollback and cleanup. Verification is mandatory before commit, rollback failure is a distinct
+prominent result, and public reasons never copy adapter exception messages. Execution is
+serialized per client-runtime scope within one application process; cancellation-noncompliant adapter
+work quarantines that scope and is tracked rather than permitting a racing switch. The registry
+bounds active and unfinished work, exposes stable quarantined scope IDs, and permits quarantine
+acknowledgement only after late adapter work has stopped; callers must reconcile runtime state
+before acknowledging it. Scope entries are released after normal execution instead of accumulating.
+Recovery phases defer caller cancellation and remain bounded by both phase-specific timeouts and a
+conservative total transaction budget.
+
+No production adapter or execute command exists yet. Therefore this foundation cannot switch a
+live connection and does not claim automatic failover. Plans and results are ephemeral and do not
+enter `FluxGateState`, signed manifests, logs, or telemetry. In-process rollback cannot survive
+`SIGKILL` or host failure. A future real adapter must provide safe credential access, child-resource
+ownership, cooperative bounded cancellation, explicit health verification, and an appropriate
+cross-process runtime lock before operator-facing execution is enabled.
+An async adapter that blocks the event-loop thread or permanently ignores task cancellation can
+still delay event-loop/process shutdown; such behavior violates the adapter contract and cannot be
+made safe by in-process quarantine alone.
+
 ## v0.4 signing and bootstrap model
 
 FluxGate uses Ed25519 from the established `cryptography` implementation for a dedicated server

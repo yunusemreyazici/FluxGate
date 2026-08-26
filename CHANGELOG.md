@@ -5,6 +5,22 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
 
 ## [Unreleased]
 
+### Safe Failover Execution Foundation
+
+- Added deterministic secret-free execution plans that bind current/target connection candidates
+  to authoritative inventory fingerprints and declare adapter, verification, rollback, strategy,
+  preconditions, support, and unsupported reasons without performing mutation.
+- Added a separate client connection adapter contract and transactional executor with immediate
+  authoritative rebinding, stale/tampered decision rejection, per-runtime locking, bounded phases,
+  explicit verification, idempotent convergence, cancellation, rollback, cleanup, and typed
+  results. It has no dependency on server provider/profile/firewall/forwarding lifecycle APIs.
+- Hardened transaction result invariants, successful-cleanup terminal state, current-candidate
+  rebinding, total phase budgeting, cross-executor lock lifetime, bounded cancellation quarantine,
+  recovery cancellation deferral, and operator-visible quarantine reconciliation.
+- Added a deterministic stateful test adapter and failure, timeout, cancellation, concurrency,
+  rollback, cleanup, stale-inventory, plan-integrity, schema-v2, and sentinel-secret regressions.
+  No production adapter or execute CLI is exposed; live connection switching remains deferred.
+
 ### Active Pathfinder Foundation
 
 - Added a capability-driven active layer that preserves the pure offline compatibility engine and
