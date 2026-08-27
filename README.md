@@ -32,8 +32,9 @@ Hysteria2.
 
 FluxGate v0.4.0 includes Secure Client Bootstrap and the offline Pathfinder compatibility
 foundation. The v0.5 development tree adds authorized bounded probing, observation-based
-scoring/ranking, selection, a non-mutating failover decision policy, and a library-level local
-sing-box SOCKS execution adapter for eligible VLESS/TCP/TLS and Trojan/TCP/TLS candidates.
+scoring/ranking, selection, a non-mutating failover decision policy, and explicit plan/foreground
+execution commands for a local sing-box SOCKS adapter supporting eligible VLESS/TCP/TLS and
+Trojan/TCP/TLS candidates.
 Continuous monitoring, automatic live route/DNS/VPN switching, remote enrollment and manifest retrieval,
 anti-replay/freshness policy, signing-key rotation, Xray-core, TUIC, WebSocket/HTTP/2/gRPC,
 Reality, and GUI/mobile applications remain deferred.
@@ -272,8 +273,14 @@ client-execution foundation that can turn a typed decision into a deterministic,
 preconditions, verification contract, rollback target, execution strategy, and whether execution
 is supported. Candidate fingerprints bind the full secret-free connection shape to the
 authoritative server identity and address authorization. The executor reloads that inventory under
-a client-runtime-scoped lock immediately before preparation and rejects missing, disabled,
+a server-and-client-runtime-scoped lock immediately before preparation and rejects missing, disabled,
 duplicate, changed, or tampered targets and rollback candidates.
+
+The saved failover decision is unsigned operator intent, not proof that Pathfinder selected its
+target. An operator may explicitly request any candidate that is currently authorized and supported;
+an absent, disabled, changed, or unsupported target fails closed. The serialized execution plan is
+also a consistency input rather than an authorization token: all authority and fingerprints are
+recomputed from the independently pinned bootstrap when `execute` runs.
 
 The adapter contract is deliberately not a `CoreProvider`: it models client connection
 `prepare -> activate -> verify -> commit`, with rollback and cleanup on failure. Explicit states,
@@ -285,16 +292,64 @@ quarantined scopes remain operator-visible until late work has stopped and the r
 explicitly reconciled. Rollback and cleanup ignore later cancellation requests but remain subject
 to their phase and total-transaction deadlines.
 
-The first real library adapter can start an exact-bootstrap-generation-bound VLESS/TCP/TLS or
+The first real adapter can start an exact-bootstrap-generation-bound VLESS/TCP/TLS or
 Trojan/TCP/TLS sing-box client as a child runtime exposing a unique authenticated `127.0.0.1`
 SOCKS5 listener. It derives a mode-0600 private config, gives sing-box an independently authorized
 concrete remote IP while preserving the original TLS hostname/SNI, validates the exact supported
 sing-box 1.13.19 binary from a safe non-writable path and validates the exact config bytes before
 activation, owns teardown through a parent-death guardian, and holds an OS advisory lock for the
 runtime scope. Verification proves the owned child and authenticated local SOCKS5 exchange only;
-it does not prove end-to-end remote traffic. The adapter is library-level and must be used as an
-async context so normal exit closes the active proxy. There is no execute CLI, daemon, route/DNS
-change, or WireGuard/OpenVPN/AmneziaWG/Hysteria2 execution support.
+it does not prove end-to-end remote traffic.
+
+Execution is intentionally a two-step operator workflow. First save the pure `failover` decision,
+then bind it to the exact private bootstrap generation without network or host mutation:
+
+```bash
+fluxgate pathfinder failover --report active-report.json --current 'profile:<profile-id>' \
+  --consecutive-failures 2 --seconds-since-switch 60 --json > failover-decision.json
+
+fluxgate pathfinder plan-execution --decision failover-decision.json \
+  --bootstrap /absolute/private/client-bootstrap \
+  --pinned-trust /absolute/pinned/trust.json \
+  --expected-client '<client-uuid>' \
+  --expected-bootstrap-sha256 '<independently-recorded-bootstrap.json-sha256>' \
+  --expected-server vpn.example.test --expected-address 192.0.2.10 \
+  --json > execution-plan.json
+```
+
+Execution repeats every independent pin and rebinds the serialized plan immediately before it
+starts the adapter. The access-file parent must already be an owned mode-0700 directory; the file
+must not exist. The bounded path is published without overwriting a racing file. The command writes
+the random SOCKS credentials only to that mode-0600 file and holds the proxy in the foreground until
+`SIGINT`, `SIGTERM`, `SIGHUP`, or an unexpected owned-runtime exit:
+
+```bash
+mkdir -m 700 /absolute/private/fluxgate-access
+fluxgate pathfinder execute --plan execution-plan.json \
+  --bootstrap /absolute/private/client-bootstrap \
+  --pinned-trust /absolute/pinned/trust.json \
+  --expected-client '<client-uuid>' \
+  --expected-bootstrap-sha256 '<independently-recorded-bootstrap.json-sha256>' \
+  --expected-server vpn.example.test --expected-address 192.0.2.10 \
+  --runtime-root /absolute/private/fluxgate-runtime \
+  --access-file /absolute/private/fluxgate-access/socks.json
+```
+
+Normal exit removes the exact access-file inode, closes the proxy, and releases its locks. A
+pathname replacement is preserved and produces a prominent cleanup error; FluxGate never deletes
+the replacement. This is explicit foreground execution, not automatic failover or monitoring. It
+does not change routes or DNS and does not add WireGuard, OpenVPN, AmneziaWG, or Hysteria2 execution
+support.
+
+Human and `--json` modes describe the same transaction result and never include SOCKS credentials.
+For a committed switch, JSON is emitted as one complete document before the command begins its
+foreground wait. A later unexpected child exit is runtime loss after commit—not transactional
+rollback—and exits non-zero after owned cleanup; a handled operator signal after commit performs
+normal cleanup and exits zero. Rejected, rolled-back, rollback-failed, and cleanup-failed execution
+results exit non-zero. An unsupported plan remains useful planning output, but `execute` rejects it.
+Because a foreground CLI process owns its OS scope lock, a second process for the same server and
+client is rejected; after normal shutdown, a new invocation creates a fresh runtime. Library-level
+already-converged reuse applies only while the same adapter owner remains alive.
 
 Hostname DNS results are intersected with the independently authorized address pins and candidate
 IP families before any socket is created. Resolver answers outside that set produce the typed
@@ -487,8 +542,8 @@ path.
 - **0.3:** sing-box and protocol profiles (released)
 - **0.4:** secure client bootstrap and offline Pathfinder compatibility foundation (released)
 - **0.5:** AmneziaWG 3.1, resilience profiles, the Active Pathfinder decision foundation, the
-  safe failover execution boundary, and a library-level local sing-box SOCKS adapter for eligible
-  VLESS/Trojan TCP/TLS candidates (development)
+  safe failover execution boundary, and explicit plan/foreground execution for a local sing-box
+  SOCKS adapter supporting eligible VLESS/Trojan TCP/TLS candidates (development)
 - **Later:** continuous Pathfinder monitoring and additional explicit live-switch adapters, remote
   enrollment and manifests,
   signing-key rotation and anti-replay, Xray-core, TUIC, WebSocket/HTTP2/gRPC transports, Reality,

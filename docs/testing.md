@@ -179,9 +179,15 @@ output, already-converged reuse and invalidation, make-before-break replacement/
 exact-child stop, cancellation including subprocess-spawn cancellation, cross-process exclusion,
 symlink/hard-link/writable-ancestor refusal, and owner-SIGKILL cleanup. The local sing-box 1.13.19
 parser also checks VLESS and Trojan runtime configs with IPv4 and IPv6 pinned destinations. No
-public internet or VPS is required. Cancellation-cooperative adapter tasks are fully drained in tests. An adapter
-that violates cancellation is tracked within a bounded global capacity and its scope is
-operator-visible until late work stops and explicit runtime reconciliation is acknowledged. Tests
+public internet or VPS is required. CLI integration tests additionally cover network-free planning,
+required security-option registration, exact-bootstrap rejection, server-and-client-bound execution
+scopes, forged-decision/current-authority semantics, bounded no-link operator JSON inputs,
+mode-0600 credential delivery without public secret output, foreground shutdown, unexpected child
+exit cleanup, signal-handler restoration, path-replacement-safe cleanup, atomic refusal to overwrite
+an existing or racing access file, and no-action zero-runtime behavior. Cancellation-cooperative
+adapter tasks are fully drained in tests. An adapter that violates cancellation is tracked within a
+bounded global capacity and its scope is operator-visible until late work stops and explicit runtime
+reconciliation is acknowledged. Tests
 cover cross-executor quarantine propagation, concurrent violation capacity, bounded lock lifetime,
 rollback/cleanup cancellation deferral, and late completion around the timeout cancellation grace.
 Ephemeral transaction rollback is not claimed to survive process or host termination, and an

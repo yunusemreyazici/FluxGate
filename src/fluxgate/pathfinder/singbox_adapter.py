@@ -102,6 +102,13 @@ def _assert_private_authority_root(root: Path) -> None:
                 total_bytes += metadata.st_size
                 if total_bytes > _MAX_AUTHORITY_TREE_BYTES:
                     raise VerificationError("client bootstrap tree exceeds the safety limit")
+            elif not stat.S_ISDIR(metadata.st_mode):
+                raise VerificationError("client bootstrap tree contains an unsafe entry")
+
+
+def validate_private_bootstrap_root(root: Path) -> None:
+    """Bound a private bootstrap tree before signature verification reads it."""
+    _assert_private_authority_root(root)
 
 
 def _read_private_authority_file(path: Path, expected_mode: int) -> bytes:
@@ -461,19 +468,7 @@ class SingBoxLocalProxyAdapter:
 
     @property
     def capability(self) -> ExecutionCapability:
-        return ExecutionCapability(
-            adapter_id="singbox-local-proxy-v1",
-            strategy=ExecutionStrategy.MAKE_BEFORE_BREAK,
-            supported_providers=(PathfinderProvider.SINGBOX,),
-            supported_protocols=(PathfinderProtocol.VLESS, PathfinderProtocol.TROJAN),
-            supported_transports=(PathfinderTransport.TCP,),
-            supported_security=(PathfinderSecurity.TLS,),
-            supported_connection_modes=(ConnectionMode.LOCAL_PROXY,),
-            verification=(
-                "local sing-box process and SOCKS5 protocol verified; remote connectivity "
-                "not verified"
-            ),
-        )
+        return singbox_local_proxy_capability()
 
     @property
     def active_endpoints(self) -> dict[str, tuple[str, int]]:
@@ -497,6 +492,13 @@ class SingBoxLocalProxyAdapter:
             for scope, state in self._scopes.items()
             if state.active is not None
         }
+
+    async def wait_until_stopped(self, scope: str) -> None:
+        """Wait for the owned foreground runtime guardian to exit."""
+        state = self._scopes.get(scope)
+        if state is None or state.active is None or state.active.process is None:
+            raise ExecutionAdapterError("sing-box execution scope has no active runtime")
+        await state.active.process.wait()
 
     async def __aenter__(self) -> SingBoxLocalProxyAdapter:
         return self
@@ -1329,3 +1331,19 @@ def discover_singbox_binary(explicit: Path | None = None) -> Path | None:
         return Path(found).resolve(strict=True)
     except OSError:
         return None
+
+
+def singbox_local_proxy_capability() -> ExecutionCapability:
+    """Return the adapter declaration without constructing or mutating a runtime."""
+    return ExecutionCapability(
+        adapter_id="singbox-local-proxy-v1",
+        strategy=ExecutionStrategy.MAKE_BEFORE_BREAK,
+        supported_providers=(PathfinderProvider.SINGBOX,),
+        supported_protocols=(PathfinderProtocol.VLESS, PathfinderProtocol.TROJAN),
+        supported_transports=(PathfinderTransport.TCP,),
+        supported_security=(PathfinderSecurity.TLS,),
+        supported_connection_modes=(ConnectionMode.LOCAL_PROXY,),
+        verification=(
+            "local sing-box process and SOCKS5 protocol verified; remote connectivity not verified"
+        ),
+    )

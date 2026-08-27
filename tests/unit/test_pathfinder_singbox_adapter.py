@@ -8,17 +8,24 @@ import os
 import signal
 import socket
 import stat
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
 import pytest
+from typer.main import get_command
+from typer.testing import CliRunner
 
+import fluxgate.cli.pathfinder_execution as pathfinder_execution_cli
 from fluxgate.bootstrap import verify_bootstrap
 from fluxgate.bootstrap.models import BootstrapArtifact, BootstrapDescriptor
+from fluxgate.cli.app import app
 from fluxgate.core.commands import CommandRunner
+from fluxgate.core.errors import PathfinderError, VerificationError
 from fluxgate.core.manifest import ManifestServer, ServerManifest
 from fluxgate.core.models import (
     Client,
@@ -1526,3 +1533,990 @@ def test_adapter_configuration_is_strict(provider_context, tmp_path: Path) -> No
             runtime_root=scenario.runtime_root,
             port_range=(1, 80),
         )
+
+
+def _write_cli_decision(scenario: Scenario, path: Path) -> None:
+    decision = FailoverDecision(
+        action=FailoverAction.SWITCH,
+        current_candidate_id=None,
+        target_candidate_id=scenario.inventory.candidates[0].candidate_id,
+        reason="operator approved verified failover",
+    )
+    path.write_text(decision.model_dump_json(indent=2))
+
+
+def _cli_authority_arguments(scenario: Scenario) -> list[str]:
+    return [
+        "--bootstrap",
+        str(scenario.root),
+        "--pinned-trust",
+        str(scenario.trust_path),
+        "--expected-client",
+        str(CLIENT_ID),
+        "--expected-bootstrap-sha256",
+        _bootstrap_digest(scenario.root),
+        "--expected-server",
+        scenario.inventory.endpoint,
+        "--expected-address",
+        "2001:0db8:0:0:0:0:0:1",
+        "--expected-address",
+        "192.0.2.10",
+    ]
+
+
+def _write_cli_plan(scenario: Scenario, path: Path) -> FailoverExecutionPlan:
+    assert scenario.inventory.server_id is not None
+    plan = plan_failover_execution(
+        scenario.inventory,
+        FailoverDecision(
+            action=FailoverAction.SWITCH,
+            current_candidate_id=None,
+            target_candidate_id=scenario.inventory.candidates[0].candidate_id,
+            reason="operator approved verified failover",
+        ),
+        (scenario.adapter.capability,),
+        ExecutionPolicy(),
+        execution_scope=(
+            f"server:{scenario.inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"
+        ),
+    )
+    path.write_text(plan.model_dump_json(indent=2))
+    return plan
+
+
+def test_execution_cli_commands_register_required_security_options() -> None:
+    pathfinder = get_command(app).commands["pathfinder"]
+    expected = {
+        "plan-execution": {
+            "--decision",
+            "--bootstrap",
+            "--pinned-trust",
+            "--expected-client",
+            "--expected-bootstrap-sha256",
+            "--expected-server",
+            "--expected-address",
+        },
+        "execute": {
+            "--plan",
+            "--bootstrap",
+            "--pinned-trust",
+            "--expected-client",
+            "--expected-bootstrap-sha256",
+            "--expected-server",
+            "--expected-address",
+            "--runtime-root",
+            "--access-file",
+            "--sing-box-binary",
+        },
+    }
+    for command_name, expected_options in expected.items():
+        command = pathfinder.commands[command_name]
+        registered = {
+            option for parameter in command.params for option in getattr(parameter, "opts", ())
+        }
+        assert expected_options <= registered
+        expected_address = next(
+            parameter
+            for parameter in command.params
+            if "--expected-address" in getattr(parameter, "opts", ())
+        )
+        assert expected_address.multiple
+        help_result = CliRunner().invoke(
+            app,
+            ["pathfinder", command_name, "--help"],
+            color=True,
+        )
+        assert help_result.exit_code == 0
+
+
+def test_plan_execution_cli_is_network_free_and_binds_exact_authority(
+    provider_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    decision = tmp_path / "decision.json"
+    _write_cli_decision(scenario, decision)
+
+    def forbidden_network(*args, **kwargs):
+        raise AssertionError("planning must not perform network I/O")
+
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden_network)
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "plan-execution",
+            "--decision",
+            str(decision),
+            *_cli_authority_arguments(scenario),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    plan = FailoverExecutionPlan.model_validate_json(result.output)
+    assert plan.execution_scope == (
+        f"server:{scenario.inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"
+    )
+    assert plan.target is not None
+    assert plan.target.candidate == scenario.inventory.candidates[0]
+    assert plan.adapter == scenario.adapter.capability
+    assert plan.execution_supported
+    assert SENTINEL_UUID not in result.output
+    assert SENTINEL_PASSWORD not in result.output
+    assert SENTINEL_TLS not in result.output
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        ("0" * 64, "generation does not match its pin"),
+        ("f" * 64, "generation does not match its pin"),
+    ],
+)
+def test_plan_execution_cli_rejects_wrong_bootstrap_generation_before_planning(
+    provider_context,
+    tmp_path: Path,
+    replacement: str,
+    message: str,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    decision = tmp_path / "decision.json"
+    _write_cli_decision(scenario, decision)
+    arguments = _cli_authority_arguments(scenario)
+    digest_index = arguments.index("--expected-bootstrap-sha256") + 1
+    arguments[digest_index] = replacement
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "plan-execution",
+            "--decision",
+            str(decision),
+            *arguments,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert message in result.output
+    assert "plan_id" not in result.output
+
+
+def test_execute_cli_runs_authenticated_proxy_only_while_foreground(
+    provider_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    scenario.mode_path.write_text("credential_output")
+    plan_path = tmp_path / "plan.json"
+    plan = _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    observed: dict[str, object] = {}
+
+    async def observe_then_stop(_stopped: asyncio.Event) -> None:
+        metadata = access_file.stat()
+        observed["mode"] = stat.S_IMODE(metadata.st_mode)
+        observed["document"] = json.loads(access_file.read_bytes())
+        observed["pid"] = int(scenario.mode_path.with_suffix(".pid").read_text())
+
+    monkeypatch.setattr(
+        pathfinder_execution_cli,
+        "_wait_for_execution_shutdown",
+        observe_then_stop,
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    public = json.loads(result.output)
+    assert public["execution"]["status"] == ExecutionStatus.COMMITTED
+    assert public["proxy_access_file"] == str(access_file)
+    assert public["foreground"] is True
+    access = observed["document"]
+    assert isinstance(access, dict)
+    assert access["execution_id"] == plan.plan_id
+    assert access["candidate_id"] == scenario.inventory.candidates[0].candidate_id
+    assert access["host"] == "127.0.0.1"
+    assert isinstance(access["username"], str) and access["username"]
+    assert isinstance(access["password"], str) and access["password"]
+    assert observed["mode"] == 0o600
+    assert not access_file.exists()
+    assert SENTINEL_UUID not in result.output
+    assert SENTINEL_PASSWORD not in result.output
+    assert SENTINEL_TLS not in result.output
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(observed["pid"]), 0)
+
+
+def test_execute_cli_rejects_plan_scope_not_bound_to_expected_client(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(scenario.plan.model_dump_json(indent=2))
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "plan scope does not match expected server and client" in result.output
+    assert not scenario.runtime_root.exists()
+    assert not access_file.exists()
+
+
+def test_execute_cli_rejects_changed_destination_authority_before_runtime_mutation(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    authority = _cli_authority_arguments(scenario)
+    while "--expected-address" in authority:
+        address_index = authority.index("--expected-address")
+        del authority[address_index : address_index + 2]
+    authority.extend(("--expected-address", "192.0.2.99"))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *authority,
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    public = json.loads(result.output)
+    assert public["execution"]["status"] == ExecutionStatus.REJECTED
+    assert public["execution"]["failure_type"] == "stale_decision"
+    assert not scenario.mode_path.with_suffix(".started").exists()
+    assert not access_file.exists()
+
+
+def test_execute_cli_revalidates_bootstrap_even_for_no_action_plan(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    assert scenario.inventory.server_id is not None
+    plan = plan_failover_execution(
+        scenario.inventory,
+        FailoverDecision(
+            action=FailoverAction.STAY,
+            current_candidate_id=scenario.inventory.candidates[0].candidate_id,
+            target_candidate_id=None,
+            reason="current candidate remains preferred",
+        ),
+        (scenario.adapter.capability,),
+        ExecutionPolicy(),
+        execution_scope=(
+            f"server:{scenario.inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"
+        ),
+    )
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2))
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    authority = _cli_authority_arguments(scenario)
+    digest_index = authority.index("--expected-bootstrap-sha256") + 1
+    authority[digest_index] = "0" * 64
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *authority,
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "generation does not match its pin" in result.output
+    assert not scenario.runtime_root.exists()
+    assert not access_file.exists()
+
+
+def test_execute_cli_refuses_existing_access_file_before_runtime_mutation(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    access_file.write_text("operator-owned\n")
+    access_file.chmod(0o600)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "proxy access file already exists" in result.output
+    assert access_file.read_text() == "operator-owned\n"
+    assert not scenario.mode_path.with_suffix(".started").exists()
+    assert not scenario.runtime_root.exists()
+
+
+def test_execute_cli_removes_access_when_owned_runtime_exits(
+    provider_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+
+    async def terminate_runtime_instead_of_shutdown(_stopped: asyncio.Event) -> None:
+        child_pid = int(scenario.mode_path.with_suffix(".pid").read_text())
+        os.kill(child_pid, signal.SIGTERM)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        pathfinder_execution_cli,
+        "_wait_for_execution_shutdown",
+        terminate_runtime_instead_of_shutdown,
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "owned sing-box runtime stopped unexpectedly" in result.output
+    assert not access_file.exists()
+
+
+def test_execute_cli_sigterm_cleans_access_runtime_and_child(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    command = [
+        sys.executable,
+        "-m",
+        "fluxgate.cli.app",
+        "pathfinder",
+        "execute",
+        "--plan",
+        str(plan_path),
+        *_cli_authority_arguments(scenario),
+        "--runtime-root",
+        str(scenario.runtime_root),
+        "--access-file",
+        str(access_file),
+        "--sing-box-binary",
+        str(scenario.binary),
+        "--json",
+    ]
+    process = subprocess.Popen(  # noqa: S603 - controlled interpreter and fixture paths
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        while not access_file.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("execution CLI did not publish proxy access")
+            time.sleep(0.02)
+        assert process.poll() is None
+        assert stat.S_IMODE(access_file.stat().st_mode) == 0o600
+        child_pid = int(scenario.mode_path.with_suffix(".pid").read_text())
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    assert process.returncode == 0, stderr
+    public = json.loads(stdout)
+    assert public["execution"]["status"] == ExecutionStatus.COMMITTED
+    assert not access_file.exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_forged_decision_can_choose_only_another_currently_authorized_candidate(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    alternate_profile = UUID("20000000-0000-0000-0000-000000000003")
+    alternate = scenario.inventory.candidates[0].model_copy(
+        update={
+            "candidate_id": f"profile:{alternate_profile}",
+            "profile_id": alternate_profile,
+            "port": 9443,
+        }
+    )
+    inventory = AuthorizedCandidateInventory(
+        source=scenario.inventory.source,
+        endpoint=scenario.inventory.endpoint,
+        server_id=scenario.inventory.server_id,
+        authorized_addresses=scenario.inventory.authorized_addresses,
+        candidates=(*scenario.inventory.candidates, alternate),
+    )
+    assert inventory.server_id is not None
+    forged_operator_intent = FailoverDecision(
+        action=FailoverAction.SWITCH,
+        current_candidate_id=None,
+        target_candidate_id=alternate.candidate_id,
+        reason="operator explicitly requested an authorized alternative",
+    )
+
+    plan = plan_failover_execution(
+        inventory,
+        forged_operator_intent,
+        (scenario.adapter.capability,),
+        ExecutionPolicy(),
+        execution_scope=(f"server:{inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"),
+    )
+    unauthorized = forged_operator_intent.model_copy(
+        update={"target_candidate_id": "profile:ffffffff-ffff-ffff-ffff-ffffffffffff"}
+    )
+    rejected = plan_failover_execution(
+        inventory,
+        unauthorized,
+        (scenario.adapter.capability,),
+        ExecutionPolicy(),
+        execution_scope=plan.execution_scope,
+    )
+
+    assert plan.status.value == "ready"
+    assert plan.target is not None and plan.target.candidate == alternate
+    assert rejected.status.value == "invalid"
+
+
+def test_operator_json_inputs_reject_special_linked_oversized_and_ambiguous_files(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    symbolic = tmp_path / "plan-link.json"
+    symbolic.symlink_to(plan_path)
+    hard = tmp_path / "plan-hard.json"
+    os.link(plan_path, hard)
+    fifo = tmp_path / "plan.fifo"
+    os.mkfifo(fifo)
+    giant = tmp_path / "plan-giant.json"
+    giant.write_bytes(b" " * (1024 * 1024 + 1))
+
+    for unsafe in (symbolic, hard, fifo, giant):
+        with pytest.raises(VerificationError):
+            pathfinder_execution_cli._load_execution_plan(unsafe)
+
+    duplicate = tmp_path / "decision-duplicate.json"
+    duplicate.write_text(
+        '{"action":"stay","action":"switch","current_candidate_id":null,'
+        '"target_candidate_id":null,"reason":"ambiguous"}'
+    )
+    malformed_utf8 = tmp_path / "decision-utf8.json"
+    malformed_utf8.write_bytes(b"\xff")
+    for unsafe in (duplicate, malformed_utf8):
+        with pytest.raises(PathfinderError):
+            pathfinder_execution_cli._load_failover_decision(unsafe)
+
+
+def test_access_file_publication_never_clobbers_a_racing_regular_file(
+    provider_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_path = access_parent / "proxy.json"
+    real_link = os.link
+
+    async def run() -> None:
+        result = await _execute(scenario)
+        assert result.status == ExecutionStatus.COMMITTED
+        access = scenario.adapter.active_proxies[scenario.plan.execution_scope]
+
+        def race_link(source, destination, *, follow_symlinks=True):
+            Path(destination).write_text("operator-owned\n")
+            return real_link(source, destination, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(os, "link", race_link)
+        with pytest.raises(VerificationError, match="already exists"):
+            pathfinder_execution_cli._write_proxy_access_file(access_path, result, access)
+        await scenario.adapter.close()
+
+    asyncio.run(run())
+    assert access_path.read_text() == "operator-owned\n"
+
+
+def test_access_cleanup_refuses_path_replacement_and_reports_original_left_behind(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_path = access_parent / "proxy.json"
+    moved_original = access_parent / "moved-original.json"
+
+    async def run() -> None:
+        result = await _execute(scenario)
+        assert result.status == ExecutionStatus.COMMITTED
+        access = scenario.adapter.active_proxies[scenario.plan.execution_scope]
+        identity = pathfinder_execution_cli._write_proxy_access_file(access_path, result, access)
+        access_path.rename(moved_original)
+        access_path.write_text("replacement\n")
+        with pytest.raises(VerificationError, match="changed while execution was active"):
+            pathfinder_execution_cli._remove_proxy_access_file(access_path, identity)
+        await scenario.adapter.close()
+
+    asyncio.run(run())
+    assert access_path.read_text() == "replacement\n"
+    assert moved_original.exists()
+
+
+def test_no_action_cli_revalidates_authority_without_creating_runtime_or_access(
+    provider_context,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    assert scenario.inventory.server_id is not None
+    plan = plan_failover_execution(
+        scenario.inventory,
+        FailoverDecision(
+            action=FailoverAction.STAY,
+            current_candidate_id=scenario.inventory.candidates[0].candidate_id,
+            target_candidate_id=None,
+            reason="operator chose to stay",
+        ),
+        (scenario.adapter.capability,),
+        ExecutionPolicy(),
+        execution_scope=(
+            f"server:{scenario.inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"
+        ),
+    )
+    plan_path = tmp_path / "stay-plan.json"
+    plan_path.write_text(plan.model_dump_json())
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+
+    def forbidden_binary_discovery(_explicit=None):
+        raise AssertionError("no-action must not discover a runtime binary")
+
+    monkeypatch.setattr(
+        pathfinder_execution_cli,
+        "discover_singbox_binary",
+        forbidden_binary_discovery,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["execution"]["status"] == "no_action"
+    assert not scenario.runtime_root.exists()
+    assert not access_file.exists()
+    assert not scenario.mode_path.with_suffix(".started").exists()
+
+
+def test_execute_cli_restores_preexisting_signal_handlers(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    assert scenario.inventory.server_id is not None
+    plan = plan_failover_execution(
+        scenario.inventory,
+        FailoverDecision(
+            action=FailoverAction.STAY,
+            current_candidate_id=scenario.inventory.candidates[0].candidate_id,
+            target_candidate_id=None,
+            reason="stay",
+        ),
+        (),
+        ExecutionPolicy(),
+        execution_scope=(
+            f"server:{scenario.inventory.server_id}:client:{CLIENT_ID}:singbox-local-proxy"
+        ),
+    )
+    plan_path = tmp_path / "stay-plan.json"
+    plan_path.write_text(plan.model_dump_json())
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+
+    def previous_handler(_signum, _frame) -> None:
+        return None
+
+    originals = {item: signal.getsignal(item) for item in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        for item in originals:
+            signal.signal(item, previous_handler)
+        result = CliRunner().invoke(
+            app,
+            [
+                "pathfinder",
+                "execute",
+                "--plan",
+                str(plan_path),
+                *_cli_authority_arguments(scenario),
+                "--runtime-root",
+                str(scenario.runtime_root),
+                "--access-file",
+                str(access_parent / "proxy.json"),
+                "--sing-box-binary",
+                str(scenario.binary),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert signal.getsignal(signal.SIGTERM) is previous_handler
+        assert signal.getsignal(signal.SIGHUP) is previous_handler
+    finally:
+        for item, handler in originals.items():
+            signal.signal(item, handler)
+
+
+def test_execution_signal_registration_outside_main_thread_is_local_and_safe() -> None:
+    observed: list[tuple[tuple[signal.Signals, object], ...]] = []
+
+    def worker() -> None:
+        async def run() -> None:
+            registered = pathfinder_execution_cli._register_execution_signal_handlers(
+                ExecutionCancellation(), asyncio.Event()
+            )
+            observed.append(registered)
+
+        asyncio.run(run())
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert observed == [()]
+
+
+def test_actual_cli_processes_exclude_same_scope_and_allow_independent_client_scope(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    first_plan_path = tmp_path / "first-plan.json"
+    _write_cli_plan(scenario, first_plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+
+    def command(
+        plan_path: Path,
+        bundle: Path,
+        trust_path: Path,
+        client_id: UUID,
+        access_path: Path,
+    ) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "fluxgate.cli.app",
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            "--bootstrap",
+            str(bundle),
+            "--pinned-trust",
+            str(trust_path),
+            "--expected-client",
+            str(client_id),
+            "--expected-bootstrap-sha256",
+            _bootstrap_digest(bundle),
+            "--expected-server",
+            scenario.inventory.endpoint,
+            "--expected-address",
+            "192.0.2.10",
+            "--expected-address",
+            "2001:db8::1",
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_path),
+            "--sing-box-binary",
+            str(scenario.binary),
+            "--json",
+        ]
+
+    first_access = access_parent / "first.json"
+    first = subprocess.Popen(  # noqa: S603 - controlled interpreter and fixture paths
+        command(first_plan_path, scenario.root, scenario.trust_path, CLIENT_ID, first_access),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    independent: subprocess.Popen[str] | None = None
+    try:
+        deadline = time.monotonic() + 10
+        while not first_access.exists() and first.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("first CLI process did not publish access")
+            time.sleep(0.02)
+        assert first.poll() is None
+
+        conflicting_access = access_parent / "conflicting.json"
+        conflicting = subprocess.run(  # noqa: S603 - controlled interpreter and fixture paths
+            command(
+                first_plan_path,
+                scenario.root,
+                scenario.trust_path,
+                CLIENT_ID,
+                conflicting_access,
+            ),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert conflicting.returncode == 1
+        assert json.loads(conflicting.stdout)["execution"]["status"] == "rolled_back"
+        assert not conflicting_access.exists()
+
+        second_client = UUID("10000000-0000-0000-0000-000000000002")
+        second_bundle = tmp_path / "second-bundle"
+        second_trust = _write_bundle(
+            provider_context,
+            second_bundle,
+            scenario.inventory.candidates[0],
+            client_id=second_client,
+        )
+        second_manifest = ServerManifest.model_validate_json(
+            (second_bundle / "manifest.json").read_bytes()
+        )
+        second_inventory = authorize_manifest(
+            second_manifest,
+            source=AuthorizationSource.SIGNED_MANIFEST,
+            trusted_server_id=scenario.inventory.server_id,
+            trusted_endpoint=scenario.inventory.endpoint,
+            trusted_addresses=scenario.inventory.authorized_addresses,
+        )
+        assert second_inventory.server_id is not None
+        second_plan = plan_failover_execution(
+            second_inventory,
+            FailoverDecision(
+                action=FailoverAction.SWITCH,
+                current_candidate_id=None,
+                target_candidate_id=second_inventory.candidates[0].candidate_id,
+                reason="independent client",
+            ),
+            (scenario.adapter.capability,),
+            ExecutionPolicy(),
+            execution_scope=(
+                f"server:{second_inventory.server_id}:client:{second_client}:singbox-local-proxy"
+            ),
+        )
+        second_plan_path = tmp_path / "second-plan.json"
+        second_plan_path.write_text(second_plan.model_dump_json())
+        second_access = access_parent / "second.json"
+        independent = subprocess.Popen(  # noqa: S603 - controlled paths
+            command(
+                second_plan_path,
+                second_bundle,
+                second_trust,
+                second_client,
+                second_access,
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 10
+        while not second_access.exists() and independent.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("independent CLI process did not publish access")
+            time.sleep(0.02)
+        assert independent.poll() is None
+        assert first.poll() is None
+    finally:
+        for process in (first, independent):
+            if process is not None and process.poll() is None:
+                process.send_signal(signal.SIGTERM)
+        for process in (first, independent):
+            if process is not None and process.poll() is None:
+                process.communicate(timeout=10)
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+    assert first.returncode == 0
+    assert independent is not None and independent.returncode == 0
+    assert not any(access_parent.iterdir())
+
+
+def test_execute_cli_sigterm_during_activation_rolls_back(
+    provider_context,
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+    scenario.mode_path.write_text("delayed_start")
+    plan_path = tmp_path / "plan.json"
+    _write_cli_plan(scenario, plan_path)
+    access_parent = tmp_path / "private-access"
+    access_parent.mkdir(mode=0o700)
+    access_file = access_parent / "proxy.json"
+    process = subprocess.Popen(  # noqa: S603 - controlled interpreter and fixture paths
+        [
+            sys.executable,
+            "-m",
+            "fluxgate.cli.app",
+            "pathfinder",
+            "execute",
+            "--plan",
+            str(plan_path),
+            *_cli_authority_arguments(scenario),
+            "--runtime-root",
+            str(scenario.runtime_root),
+            "--access-file",
+            str(access_file),
+            "--sing-box-binary",
+            str(scenario.binary),
+            "--json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    started = scenario.mode_path.with_suffix(".started")
+    try:
+        deadline = time.monotonic() + 10.0
+        while not started.exists() and process.poll() is None:
+            if time.monotonic() >= deadline:
+                raise AssertionError("execution CLI did not begin activation")
+            time.sleep(0.01)
+        assert process.poll() is None
+        child_pid = int(scenario.mode_path.with_suffix(".pid").read_text())
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    assert process.returncode == 1, stderr
+    public = json.loads(stdout)
+    assert public["execution"]["status"] == ExecutionStatus.CANCELLED
+    assert public["execution"]["failure_type"] == "cancellation"
+    assert public["execution"]["rollback"] == "succeeded"
+    assert public["execution"]["cleanup"] == "succeeded"
+    assert not access_file.exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)

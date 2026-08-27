@@ -9,6 +9,10 @@ import typer
 from pydantic import ValidationError
 
 from fluxgate.cli.common import fail
+from fluxgate.cli.pathfinder_execution import (
+    pathfinder_execute,
+    pathfinder_plan_execution,
+)
 from fluxgate.core.config import PathfinderProbeConfig, load_config
 from fluxgate.core.errors import FluxGateError, PathfinderError, VerificationError
 from fluxgate.core.manifest import ServerManifest, build_manifest
@@ -280,3 +284,7 @@ def pathfinder_failover(
         typer.echo(f"reason: {decision.reason}")
     except (FluxGateError, OSError, ValidationError) as error:
         fail(error)
+
+
+pathfinder_app.command("plan-execution")(pathfinder_plan_execution)
+pathfinder_app.command("execute")(pathfinder_execute)

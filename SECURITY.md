@@ -106,8 +106,14 @@ before acknowledging it. Scope entries are released after normal execution inste
 Recovery phases defer caller cancellation and remain bounded by both phase-specific timeouts and a
 conservative total transaction budget.
 
-The library-level `SingBoxLocalProxyAdapter` is the first real adapter, but no execute command or
-automatic failover surface exists. It accepts only a pinned, signature-verified bootstrap whose
+The `SingBoxLocalProxyAdapter` is the first real adapter. The explicit `pathfinder plan-execution`
+and foreground `pathfinder execute` commands are its only CLI surface; there is no automatic
+failover or background monitor. Both commands require the pinned trust descriptor, expected client
+UUID, exact independently recorded `bootstrap.json` SHA-256, expected server endpoint, and bounded
+destination-address pins. Planning verifies those inputs and performs no network or host mutation;
+execution verifies them again before the executor and adapter independently reload authority.
+
+The adapter accepts only a pinned, signature-verified bootstrap whose
 exact digest is independently supplied, bound to the expected server, client, profile, manifest
 generation, candidate, and artifact digest. It
 derives a private ephemeral config rather than accepting arbitrary operator JSON. The remote
@@ -122,7 +128,7 @@ traffic. Private configs are mode 0600 inside owned mode-0700 runtime directorie
 is discarded, and public results never contain child errors or credentials. The exact supported
 sing-box 1.13.19 executable must be a safe regular single-link file below non-writable ancestors;
 the executable identity and runtime-config digest are rechecked across validation and activation.
-An advisory OS lock serializes the runtime scope across
+An advisory OS lock serializes the server-and-client runtime scope across
 processes. A parent-death guardian inherits that lock and stops the exact child before releasing
 it, preventing a crashed owner from opening an overlap window. The sing-box child also inherits
 the lock, so an isolated guardian crash fails closed; the owning adapter terminates the exact
@@ -131,6 +137,20 @@ adapter lifetime and close it; `SIGKILL` cannot preserve transaction rollback, b
 tears down the already-started child and the next owner reconciles its private stale directory.
 Plans and results remain ephemeral and do not enter `FluxGateState`, signed manifests, logs, or
 telemetry.
+Authenticated SOCKS credentials are never included in the plan, public execution result, human
+output, or JSON output. They are written only to an operator-selected new file below an owned
+mode-0700 directory, with bounded paths and atomic no-clobber publication at mode 0600. Execution
+refuses an existing or racing destination, removes only the exact inode it created, and deletes it
+during normal signal handling, unexpected owned runtime exit, or rollback/cleanup. The CLI stays in
+the foreground for the adapter lifetime; it is not a daemon and creates no persistent connection
+state. An uncatchable owner `SIGKILL` may leave the now-stale access file behind even though the
+guardian tears down the proxy; the next execution refuses to overwrite it so the operator must
+remove that exact stale file explicitly.
+Unsigned failover decisions are explicit operator instructions, not evidence of Pathfinder
+provenance. Execution plans are secret-free consistency inputs, not authorization tokens. Neither
+can authorize a candidate or destination absent from the currently signature-verified bootstrap and
+independent server/address/generation pins. Decision and plan JSON reads are bounded and refuse
+symlinks, hard links, non-regular files, duplicate keys, malformed UTF-8, and non-finite numbers.
 An async adapter that blocks the event-loop thread or permanently ignores task cancellation can
 still delay event-loop/process shutdown; such behavior violates the adapter contract and cannot be
 made safe by in-process quarantine alone.

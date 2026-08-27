@@ -19,8 +19,12 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
   replacement, idempotency, OS advisory scope locking, exact-child teardown, and a parent-death
   guardian that retains the lock through cleanup.
 - Added controlled fake-binary subprocess, cross-process, crash, cancellation, privacy, bootstrap
-  tampering, DNS destination-binding, symlink, port collision, and rollback regressions. No execute
-  CLI or automatic failover daemon is exposed.
+  tampering, DNS destination-binding, symlink, port collision, and rollback regressions.
+- Added explicit `pathfinder plan-execution` and foreground `pathfinder execute` commands for the
+  local sing-box adapter. Both require independent trust, client, exact-bootstrap-generation,
+  server, and destination-address pins. Authenticated SOCKS credentials are exposed only through a
+  bounded, atomically no-clobber mode-0600 access file that is removed on shutdown; execution scopes
+  bind both server and client identity, and no automatic failover daemon is exposed.
 
 - Added deterministic secret-free execution plans that bind current/target connection candidates
   to authoritative inventory fingerprints and declare adapter, verification, rollback, strategy,
@@ -34,7 +38,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and t
   recovery cancellation deferral, and operator-visible quarantine reconciliation.
 - Added a deterministic stateful test adapter and failure, timeout, cancellation, concurrency,
   rollback, cleanup, stale-inventory, plan-integrity, schema-v2, and sentinel-secret regressions.
-  No execute CLI is exposed; system-wide live connection switching remains deferred.
+  System-wide live connection switching remains deferred.
 
 ### Active Pathfinder Foundation
 
