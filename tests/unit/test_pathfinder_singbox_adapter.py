@@ -340,7 +340,7 @@ def _scenario(
     protocol: PathfinderProtocol = PathfinderProtocol.VLESS,
     endpoint: str = "vpn.example.test",
     pins: tuple[str, ...] = ("192.0.2.10", "2001:db8::1"),
-    port_range: tuple[int, int] = (31000, 31100),
+    port_range: tuple[int, int] = (20000, 60999),
     port_attempts: int = 4,
     expected_client_id: UUID = CLIENT_ID,
     artifact_candidate_id: str | None = None,
@@ -998,6 +998,7 @@ def test_failed_replacement_preserves_previous_runtime_then_success_retires_it(
 
     async def run() -> tuple[object, object, object, int, int, int, int]:
         first = await _execute(scenario)
+        assert first.status == ExecutionStatus.COMMITTED, first
         old_endpoint = scenario.adapter.active_endpoints[scenario.plan.execution_scope]
         old_config = next(scenario.runtime_root.rglob("config.json"))
         old_config.write_text("{}")
@@ -1460,6 +1461,7 @@ def test_guardian_crash_cannot_release_lock_while_child_survives_or_block_recove
 
     async def run() -> tuple[object, object, int]:
         first = await _execute(scenario)
+        assert first.status == ExecutionStatus.COMMITTED, first
         state = scenario.adapter._scopes[scenario.plan.execution_scope]
         assert state.active is not None and state.active.process is not None
         guardian = state.active.process
@@ -1533,6 +1535,15 @@ def test_adapter_configuration_is_strict(provider_context, tmp_path: Path) -> No
             runtime_root=scenario.runtime_root,
             port_range=(1, 80),
         )
+
+
+def test_default_adapter_scenarios_do_not_share_a_narrow_time_wait_port_band(
+    provider_context, tmp_path: Path
+) -> None:
+    scenario = _scenario(provider_context, tmp_path)
+
+    assert scenario.adapter._port_range == (20000, 60999)
+    assert scenario.adapter._port_attempts == 4
 
 
 def _write_cli_decision(scenario: Scenario, path: Path) -> None:
